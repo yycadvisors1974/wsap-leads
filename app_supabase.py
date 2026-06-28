@@ -1,0 +1,1151 @@
+"""
+WSAP Leads Tracker — Streamlit App with Supabase Backend
+
+Salespersons log in and see only their leads.
+They update Follow-up Status & Remarks.
+Changes write directly to Supabase.
+Admin sees all data + summary dashboard + can edit any field.
+Manager sees their team overview + own leads.
+"""
+
+import io
+import time
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from supabase import create_client
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
+
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "Yyc1974@Marketing")
+
+# Salesperson passwords: name-based + @ + last 4 digits of phone
+SP_PASSWORDS = {
+    "PANG": "pang@7747",
+    "LUCAS": "lucas@8322",
+    "ELLA SOON": "ella@4684",
+    "DAVID": "david@1303",
+    "BOON WAI": "boonwai@5471",
+    "CARMEN": "carmen@3928",
+    "ESTHER SOO": "esther@4850",
+    "EDISON": "edison@5687",
+    "YEOW JIA JIE": "jj@5120",
+    "MIA": "mia@0316",
+    "HUI": "hui@8468",
+    "WAN ROU": "wanrou@0807",
+    "IAN": "ian@5687",
+    "JENNY LEE": "jenny@8386",
+    "JACOB": "jacob@1563",
+    "CJ": "cj@0610",
+}
+
+SALESPERSONS = {
+    "boonwai.ho@yycadvisors.com": "BOON WAI",
+    "chijian.ng@yycadvisors.com": "LUCAS",
+    "chilipang@yycadvisors.com": "PANG",
+    "sinmee.su@yycadvisors.com": "MIA",
+    "karwun.low@yycadvisors.com": "CARMEN",
+    "davidng@yycadvisors.com": "DAVID",
+    "wanrou.tan@yycadvisors.com": "WAN ROU",
+    "ellasoon@yycadvisors.com": "ELLA SOON",
+    "soo.yingying@yycadvisors.com": "ESTHER SOO",
+    "chuanyau.ngoh@yycadvisors.com": "EDISON",
+    "shausong.chong@yycadvisors.com": "IAN",
+    "chaiyuen@yycadvisors.com": "JENNY LEE",
+    "winhui.teow@yycadvisors.com": "HUI",
+    "jiajie.yeow@yycadvisors.com": "YEOW JIA JIE",
+    "cheejian.chen@yycadvisors.com": "CJ",
+    "chunjie.lim@yycadvisors.com": "JACOB",
+}
+
+TEAMS = {
+    "PANG'S TEAM": ["PANG", "BOON WAI", "LUCAS"],
+    "DAVID'S TEAM": ["DAVID", "WAN ROU"],
+    "MIA'S TEAM": ["MIA", "CARMEN"],
+    "ELLA'S TEAM": ["ELLA SOON", "ESTHER SOO", "EDISON", "IAN"],
+    "TELE": ["CJ", "HUI", "JACOB", "JENNY LEE", "YEOW JIA JIE"],
+}
+
+TEAM_ORDER = ["PANG'S TEAM", "DAVID'S TEAM", "MIA'S TEAM", "ELLA'S TEAM", "TELE"]
+
+MANAGERS = {
+    "PANG": "PANG'S TEAM",
+    "DAVID": "DAVID'S TEAM",
+    "MIA": "MIA'S TEAM",
+    "ELLA SOON": "ELLA'S TEAM",
+}
+
+FOLLOWUP_STATUSES = [
+    "Yet to call",
+    "Unreached",
+    "Follow Up",
+    "Call Back",
+    "Demo set",
+    "Demo met, yet to buy",
+    "Register for next preview",
+    "Potential",
+    "Sales",
+    "Duplicate",
+    "Invalid Number",
+    "Rejected",
+    "Competitor",
+]
+
+MANAGER_STATUSES = ["Potential", "Demo met, yet to buy", "Demo set", "Follow Up"]
+
+NOT_CALLED_STATUSES = ["Yet to call", "Unreached", "Call Back"]
+
+DISPLAY_COLUMNS = [
+    "ID", "Full Name", "Company Name", "Contact Number", "Email Address",
+    "Designation", "Follow-up Status", "Remarks", "Conversation Log",
+    "Preview Date", "Topic", "Attendance", "Concern", "Area", "Industry",
+    "Revenue (M)", "Duplicate Check", "Registered", "Attended",
+]
+
+# Columns shown by default in salesperson view (others can be toggled on)
+SP_DEFAULT_COLUMNS = [
+    "Full Name", "Company Name", "Contact Number",
+    "Designation", "Follow-up Status", "Remarks",
+    "Conversation Log", "Duplicate Check", "Registered", "Attended",
+    "Revenue (M)",
+]
+
+# Additional columns salesperson can toggle on
+SP_EXTRA_COLUMNS = [
+    "ID", "Email Address", "Preview Date", "Topic",
+    "Attendance", "Concern", "Area", "Industry",
+]
+
+# Supabase column name → Display column name
+DB_TO_DISPLAY = {
+    "id": "ID",
+    "full_name": "Full Name",
+    "company_name": "Company Name",
+    "contact_number": "Contact Number",
+    "email_address": "Email Address",
+    "designation": "Designation",
+    "sales_person": "Sales Person",
+    "reminder_call_pic": "Reminder Call PIC",
+    "concern": "Concern",
+    "leads": "Leads",
+    "utm_source": "utm_source",
+    "utm_medium": "utm_medium",
+    "utm_campaign": "utm_campaign",
+    "utm_term": "utm_term",
+    "utm_content": "utm_content",
+    "area": "Area",
+    "revenue_m": "Revenue (M)",
+    "hrdc": "HRDC",
+    "reference_link": "Reference Link",
+    "industry": "Industry",
+    "created_at": "Created",
+    "zoom_link": "Zoom Link",
+    "confirmation_status": "Confirmation Status",
+    "reminder_call_status": "Reminder Call Status",
+    "followup_status": "Follow-up Status",
+    "conversation_log": "Conversation Log",
+    "attendance": "Attendance",
+    "preview_date": "Preview Date",
+    "sales_person_name": "Sales Person Name",
+    "sales_person_team": "Sales Person Team",
+    "utm_value": "UTM Value",
+    "utm_grouping": "UTM Grouping",
+    "topic": "Topic",
+    "remarks": "Remarks",
+    "duplicate_check": "Duplicate Check",
+    "registered": "Registered",
+    "attended": "Attended",
+    "pk": "pk",
+}
+
+DISPLAY_TO_DB = {v: k for k, v in DB_TO_DISPLAY.items()}
+
+# ==============================================================================
+# PAGE CONFIG & CSS
+# ==============================================================================
+
+st.set_page_config(
+    page_title="WSAP Leads Tracker",
+    page_icon="📋",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown("""
+<style>
+    .stMetric {
+        background: #f8f9fa;
+        padding: 10px 15px;
+        border-radius: 8px;
+        border: 1px solid #e9ecef;
+    }
+    .stMetric label { font-size: 12px !important; }
+    .stMetric [data-testid="stMetricValue"] { font-size: 24px !important; font-weight: 700; }
+    div[data-testid="stDataFrame"] { border: 1px solid #e0e0e0; border-radius: 8px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ==============================================================================
+# SUPABASE CLIENT
+# ==============================================================================
+
+
+@st.cache_resource
+def get_supabase():
+    """Create a cached Supabase client."""
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+# ==============================================================================
+# DATA
+# ==============================================================================
+
+
+@st.cache_data(ttl=120)
+def load_data() -> pd.DataFrame:
+    """Load all data from Supabase."""
+    supabase = get_supabase()
+
+    # Fetch all rows (Supabase paginates at 1000 by default)
+    all_rows = []
+    offset = 0
+    batch_size = 1000
+    while True:
+        resp = supabase.table("leads").select("*").range(offset, offset + batch_size - 1).execute()
+        rows = resp.data
+        if not rows:
+            break
+        all_rows.extend(rows)
+        if len(rows) < batch_size:
+            break
+        offset += batch_size
+
+    df = pd.DataFrame(all_rows)
+
+    # Rename columns from DB names to display names
+    df = df.rename(columns=DB_TO_DISPLAY)
+
+    # Clean up data
+    if "Contact Number" in df.columns:
+        df["Contact Number"] = df["Contact Number"].fillna("").astype(str)
+    if "Company Name" in df.columns:
+        df["Company Name"] = df["Company Name"].fillna("").astype(str)
+    if "Sales Person Name" in df.columns:
+        df["Sales Person Name"] = df["Sales Person Name"].fillna("")
+    if "Sales Person Team" in df.columns:
+        df["Sales Person Team"] = df["Sales Person Team"].fillna("")
+    if "Follow-up Status" in df.columns:
+        df["Follow-up Status"] = df["Follow-up Status"].fillna("Yet to call")
+    if "Preview Date" in df.columns:
+        dt = pd.to_datetime(df["Preview Date"], errors="coerce")
+        df["Preview Date Display"] = dt.dt.strftime("%Y-%m-%d").fillna("")
+        df["Event Year"] = dt.dt.year.astype("Int64").astype(str).replace("<NA>", "")
+        df["Event Month"] = dt.dt.strftime("%Y-%m").fillna("")
+
+    return df
+
+
+def save_changes(changes: dict):
+    """Save changes to Supabase. changes = {pk: {db_col: new_val, ...}, ...}"""
+    supabase = get_supabase()
+    for pk, updates in changes.items():
+        supabase.table("leads").update(updates).eq("pk", pk).execute()
+    load_data.clear()
+
+
+def get_assigned_leads(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter to only leads assigned to the 16 salespersons."""
+    sp_emails = [e.lower() for e in SALESPERSONS.keys()]
+    return df[df["Sales Person"].str.lower().isin(sp_emails)].copy()
+
+
+# ==============================================================================
+# CASCADING DATE FILTER
+# ==============================================================================
+
+
+def cascading_date_filter(df: pd.DataFrame, key_prefix: str):
+    """Render Year -> Month -> Event Date cascading filters. Returns filtered df."""
+    c1, c2, c3 = st.columns(3)
+
+    all_years = sorted([y for y in df["Event Year"].dropna().unique() if y and y != "<NA>"])
+    with c1:
+        sel_year = st.multiselect("Year", all_years, default=[], placeholder="All years", key=f"{key_prefix}_year")
+
+    df_y = df.copy()
+    if sel_year:
+        df_y = df_y[df_y["Event Year"].isin(sel_year)]
+
+    all_months = sorted([m for m in df_y["Event Month"].dropna().unique() if m])
+    with c2:
+        sel_month = st.multiselect("Month", all_months, default=[], placeholder="All months", key=f"{key_prefix}_month")
+
+    df_m = df_y.copy()
+    if sel_month:
+        df_m = df_m[df_m["Event Month"].isin(sel_month)]
+
+    all_dates = sorted([d for d in df_m["Preview Date Display"].dropna().unique() if d])
+    with c3:
+        sel_date = st.multiselect("Event Date", all_dates, default=[], placeholder="All dates", key=f"{key_prefix}_date")
+
+    df_result = df_m.copy()
+    if sel_date:
+        df_result = df_result[df_result["Preview Date Display"].isin(sel_date)]
+
+    return df_result
+
+
+# ==============================================================================
+# HELPER: BUILD CALLING STATUS SUMMARY
+# ==============================================================================
+
+
+def build_calling_summary(df: pd.DataFrame, teams_to_show=None, statuses=None):
+    """Build calling status summary grouped by team."""
+    if teams_to_show is None:
+        teams_to_show = TEAM_ORDER
+    if statuses is None:
+        statuses = FOLLOWUP_STATUSES
+
+    rows = []
+    grand_totals = {s: 0 for s in statuses}
+    grand_totals["Total"] = 0
+
+    for team in teams_to_show:
+        members = TEAMS.get(team, [])
+        team_totals = {s: 0 for s in statuses}
+        team_totals["Total"] = 0
+
+        for member in sorted(members):
+            member_df = df[df["Sales Person Name"] == member]
+            row = {"Sales Person": member}
+            row_total = 0
+            for status in statuses:
+                count = int(len(member_df[member_df["Follow-up Status"] == status]))
+                row[status] = count
+                team_totals[status] += count
+                grand_totals[status] += count
+                row_total += count
+            row["Total"] = row_total
+            team_totals["Total"] += row_total
+            grand_totals["Total"] += row_total
+            rows.append(row)
+
+        team_row = {"Sales Person": f"{team} Total"}
+        for s in statuses:
+            team_row[s] = team_totals[s]
+        team_row["Total"] = team_totals["Total"]
+        rows.append(team_row)
+
+    grand_row = {"Sales Person": "GRAND TOTAL"}
+    for s in statuses:
+        grand_row[s] = grand_totals[s]
+    grand_row["Total"] = grand_totals["Total"]
+    rows.append(grand_row)
+
+    return pd.DataFrame(rows)
+
+
+def style_summary_table(df: pd.DataFrame):
+    """Style calling summary with highlighted team subtotal and grand total rows."""
+    def row_style(row):
+        sp = str(row["Sales Person"])
+        if "GRAND TOTAL" in sp:
+            return ["background-color: #1f4e79; color: white; font-weight: bold"] * len(row)
+        elif "Total" in sp:
+            return ["background-color: #d6e4f0; font-weight: bold"] * len(row)
+        return [""] * len(row)
+    return df.style.apply(row_style, axis=1)
+
+
+# ==============================================================================
+# KPI CARD
+# ==============================================================================
+
+
+def render_team_kpi_card(df_team: pd.DataFrame, team_name: str, target_pct: int):
+    """Render a screenshot-friendly KPI card for a team."""
+    total = len(df_team)
+    not_called = len(df_team[df_team["Follow-up Status"].isin(NOT_CALLED_STATUSES)])
+    called = total - not_called
+    calling_pct = round(called / total * 100) if total > 0 else 0
+    target_count = round(total * target_pct / 100)
+
+    if calling_pct >= target_pct:
+        light = "🟢"
+    elif calling_pct >= target_pct * 0.5:
+        light = "🟡"
+    else:
+        light = "🔴"
+
+    display_name = team_name.replace("'S TEAM", "'s Team").title() if "TEAM" in team_name else team_name.title()
+
+    members = TEAMS.get(team_name, [])
+    person_parts = []
+    for member in sorted(members):
+        m_df = df_team[df_team["Sales Person Name"] == member]
+        m_total = len(m_df)
+        m_not_called = len(m_df[m_df["Follow-up Status"].isin(NOT_CALLED_STATUSES)])
+        m_called = m_total - m_not_called
+        person_parts.append(f"{member}: {m_called}")
+    person_line = " | ".join(person_parts)
+
+    st.markdown(f"""
+    <div style="background: #1a1a2e; color: #e0e0e0; padding: 24px 32px; border-radius: 12px;
+                margin-bottom: 16px; text-align: center; font-family: sans-serif;">
+        <div style="font-size: 20px; font-weight: 700; margin-bottom: 12px; color: #ffffff;">
+            {display_name}
+        </div>
+        <div style="font-size: 15px; line-height: 2;">
+            Total Leads : <b>{total}</b><br>
+            Target of Calling Rate : <b>{target_count} ({target_pct}%)</b><br>
+            Calling Rate Result : <b>{called} ({calling_pct}%)</b> {light}<br>
+            UR, Call Back, Yet to Call : <b>{not_called}</b>
+        </div>
+        <div style="font-size: 12px; color: #aab; margin-top: 8px;">
+            {person_line}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ==============================================================================
+# LOGIN
+# ==============================================================================
+
+
+def login_page():
+    st.markdown("""
+    <div style="text-align: center; padding: 60px 0 30px 0;">
+        <h1 style="font-size: 2.5em; margin-bottom: 5px;">WSAP Leads Tracker</h1>
+        <p style="color: #888; font-size: 1.1em;">Sign in to access your leads</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1.2, 1.5, 1.2])
+    with col2:
+        with st.container(border=True):
+            st.markdown("#### Sign In")
+            options = ["-- Select your name --"] + sorted(SALESPERSONS.values()) + ["ADMIN"]
+            selected = st.selectbox("Who are you?", options, label_visibility="collapsed")
+            password = st.text_input("Password", type="password")
+            submitted = st.button("Sign In", use_container_width=True, type="primary")
+
+            if submitted:
+                if selected == "-- Select your name --":
+                    st.error("Please select your name.")
+                elif selected == "ADMIN":
+                    if password == ADMIN_PASSWORD:
+                        st.session_state.update(user_email="admin", user_name="ADMIN", is_admin=True, is_manager=False)
+                        st.rerun()
+                    else:
+                        st.error("Incorrect password.")
+                else:
+                    email = [e for e, n in SALESPERSONS.items() if n == selected][0]
+                    expected_pw = SP_PASSWORDS.get(selected, "")
+                    if password == expected_pw:
+                        st.session_state.update(
+                            user_email=email, user_name=selected, is_admin=False,
+                            is_manager=selected in MANAGERS,
+                            manager_team=MANAGERS.get(selected, ""),
+                        )
+                        st.rerun()
+                    else:
+                        st.error("Incorrect password.")
+
+
+# ==============================================================================
+# SALESPERSON VIEW
+# ==============================================================================
+
+
+def salesperson_view(user_email: str, user_name: str):
+    hcol1, hcol2 = st.columns([3, 1])
+    with hcol1:
+        st.markdown(f"## {user_name}'s Leads")
+    with hcol2:
+        st.button("Refresh", on_click=load_data.clear, key="sp_refresh")
+
+    df_full = load_data()
+    df_sp = df_full[df_full["Sales Person"].str.lower() == user_email.lower()].copy()
+
+    if df_sp.empty:
+        st.warning("No leads found for your account.")
+        return
+
+    # --- Attendance filter first (determines what cards show) ---
+    fcol0a, fcol0b, fcol0c = st.columns(3)
+    with fcol0a:
+        attend_filter = st.selectbox(
+            "Attendance", ["Attended (1)", "Not Attended (0)", "All"], key="sp_attend"
+        )
+    with fcol0b:
+        status_filter = st.multiselect(
+            "Filter by Status", FOLLOWUP_STATUSES, default=[], placeholder="All statuses", key="sp_status"
+        )
+    with fcol0c:
+        event_dates = sorted([d for d in df_sp["Preview Date Display"].dropna().unique() if d])
+        event_filter = st.multiselect(
+            "Filter by Event Date", event_dates, default=[], placeholder="All events", key="sp_event"
+        )
+
+    # --- Filters Row 2 ---
+    fcol4, fcol5, fcol6 = st.columns(3)
+    with fcol4:
+        search = st.text_input("Search name, company, or phone", "", key="sp_search")
+    with fcol5:
+        log_search = st.text_input("Search conversation log", "", key="sp_log")
+    with fcol6:
+        revenue_sort = st.selectbox(
+            "Sort by Revenue", ["Default", "Revenue: High to Low", "Revenue: Low to High"], key="sp_rev"
+        )
+
+    # --- Apply Filters ---
+    df_display = df_sp.copy()
+    if attend_filter == "Attended (1)":
+        df_display = df_display[df_display["Attendance"] == 1]
+    elif attend_filter == "Not Attended (0)":
+        df_display = df_display[df_display["Attendance"] == 0]
+
+    # --- Status Summary Cards (reflects attendance filter) ---
+    status_counts = df_display["Follow-up Status"].value_counts()
+    total = len(df_display)
+    card_statuses = ["Yet to call", "Unreached", "Follow Up", "Call Back", "Demo set", "Potential", "Sales"]
+    cols = st.columns(len(card_statuses))
+    for i, status in enumerate(card_statuses):
+        cols[i].metric(status, status_counts.get(status, 0))
+    st.caption(f"Total: **{total}** leads")
+    st.divider()
+    if status_filter:
+        df_display = df_display[df_display["Follow-up Status"].isin(status_filter)]
+    if event_filter:
+        df_display = df_display[df_display["Preview Date Display"].isin(event_filter)]
+    if search:
+        s = search.strip()
+        mask = (
+            df_display["Full Name"].astype(str).str.contains(s, case=False, na=False)
+            | df_display["Company Name"].astype(str).str.contains(s, case=False, na=False)
+            | df_display["Contact Number"].astype(str).str.contains(s, case=False, na=False)
+        )
+        df_display = df_display[mask]
+    if log_search:
+        df_display = df_display[
+            df_display["Conversation Log"].astype(str).str.contains(log_search, case=False, na=False)
+        ]
+    if revenue_sort == "Revenue: High to Low":
+        df_display = df_display.sort_values("Revenue (M)", ascending=False, na_position="last")
+    elif revenue_sort == "Revenue: Low to High":
+        df_display = df_display.sort_values("Revenue (M)", ascending=True, na_position="last")
+
+    all_cols = [c for c in DISPLAY_COLUMNS if c in df_display.columns]
+    df_edit = df_display[["pk"] + all_cols].copy()
+
+    st.markdown(f"**Showing {len(df_edit)} leads** — edit Follow-up Status & Remarks, then click Save.")
+
+    # --- Editable Table ---
+    edited_df = st.data_editor(
+        df_edit,
+        column_config={
+            "pk": None,  # Hidden
+            "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+            "Full Name": st.column_config.TextColumn("Full Name", disabled=True, width="medium"),
+            "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
+            "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
+            "Email Address": st.column_config.TextColumn("Email", disabled=True, width="medium"),
+            "Designation": st.column_config.TextColumn("Designation", disabled=True, width="small"),
+            "Follow-up Status": st.column_config.SelectboxColumn(
+                "Follow-up Status", options=FOLLOWUP_STATUSES, required=True, width="medium",
+            ),
+            "Remarks": st.column_config.TextColumn("Remarks", width="large"),
+            "Conversation Log": st.column_config.TextColumn("Log", disabled=True, width="medium"),
+            "Preview Date": st.column_config.TextColumn("Event Date", disabled=True, width="small"),
+            "Topic": st.column_config.TextColumn("Topic", disabled=True, width="small"),
+            "Attendance": st.column_config.TextColumn("Attend", disabled=True, width="small"),
+            "Concern": st.column_config.TextColumn("Concern", disabled=True, width="medium"),
+            "Area": st.column_config.TextColumn("Area", disabled=True, width="small"),
+            "Industry": st.column_config.TextColumn("Industry", disabled=True, width="small"),
+            "Revenue (M)": st.column_config.NumberColumn("Revenue (M)", disabled=True, width="small"),
+            "Duplicate Check": st.column_config.TextColumn("Dup Chk", disabled=True, width="small"),
+            "Registered": st.column_config.NumberColumn("Registered", disabled=True, width="small"),
+            "Attended": st.column_config.NumberColumn("Attended", disabled=True, width="small"),
+        },
+        use_container_width=True,
+        num_rows="fixed",
+        hide_index=True,
+        key="sp_editor",
+    )
+
+    # --- Save Button ---
+    if st.button("Save Changes", type="primary", use_container_width=True):
+        changes = {}
+        for i in range(len(df_edit)):
+            orig_row = df_edit.iloc[i]
+            edit_row = edited_df.iloc[i]
+            orig_status = str(orig_row.get("Follow-up Status", ""))
+            edit_status = str(edit_row.get("Follow-up Status", ""))
+            orig_remarks = str(orig_row.get("Remarks", ""))
+            edit_remarks = str(edit_row.get("Remarks", ""))
+
+            if orig_status != edit_status or orig_remarks != edit_remarks:
+                pk = int(orig_row["pk"])
+                updates = {}
+                if orig_status != edit_status:
+                    updates["followup_status"] = edit_status
+                if orig_remarks != edit_remarks:
+                    updates["remarks"] = edit_remarks if edit_remarks != "nan" else None
+                changes[pk] = updates
+
+        if changes:
+            with st.spinner(f"Saving {len(changes)} change(s)..."):
+                try:
+                    save_changes(changes)
+                    st.success(f"{len(changes)} change(s) saved!")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error saving: {e}")
+        else:
+            st.info("No changes detected.")
+
+
+# ==============================================================================
+# MANAGER VIEW
+# ==============================================================================
+
+
+def manager_view(user_email: str, user_name: str, team_name: str):
+    hcol1, hcol2 = st.columns([3, 1])
+    with hcol1:
+        st.markdown(f"## {user_name} — {team_name}")
+    with hcol2:
+        st.button("Refresh", on_click=load_data.clear, key="mgr_refresh")
+
+    tab_leads, tab_team = st.tabs(["My Leads", "Team Overview"])
+
+    with tab_leads:
+        salesperson_view(user_email, user_name)
+
+    with tab_team:
+        df_full = load_data()
+        df_assigned = get_assigned_leads(df_full)
+
+        team_members = TEAMS.get(team_name, [])
+        df_team = df_assigned[df_assigned["Sales Person Name"].isin(team_members)].copy()
+
+        mgr_attend = st.selectbox(
+            "Attendance", ["Attended (1)", "Not Attended (0)", "All"], key="mgr_attend"
+        )
+
+        df_team = cascading_date_filter(df_team, "mgr")
+
+        if mgr_attend == "Attended (1)":
+            df_team = df_team[df_team["Attendance"] == 1]
+        elif mgr_attend == "Not Attended (0)":
+            df_team = df_team[df_team["Attendance"] == 0]
+
+        st.caption(f"**{len(df_team)}** leads across **{len(team_members)}** team members")
+
+        st.markdown("### Manager's Table")
+        mgr_table = build_calling_summary(df_team, teams_to_show=[team_name], statuses=MANAGER_STATUSES)
+        st.dataframe(style_summary_table(mgr_table), use_container_width=True, hide_index=True)
+
+        st.markdown("### Calling Status Summary")
+        call_summary = build_calling_summary(df_team, teams_to_show=[team_name])
+        st.dataframe(style_summary_table(call_summary), use_container_width=True, hide_index=True)
+
+        st.markdown("### Team KPI")
+        render_team_kpi_card(df_team, team_name, 70)
+
+
+# ==============================================================================
+# ADMIN VIEW
+# ==============================================================================
+
+
+def admin_view():
+    hcol1, hcol2 = st.columns([3, 1])
+    with hcol1:
+        st.markdown("## Admin Dashboard")
+    with hcol2:
+        st.button("Refresh", on_click=load_data.clear, key="admin_refresh")
+
+    df_full = load_data()
+    df = get_assigned_leads(df_full)
+
+    st.caption(f"**{len(df)}** leads across **{len(SALESPERSONS)}** salespersons")
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Calling Status", "All Leads", "Charts", "Daily Report", "Upload New Leads"
+    ])
+
+    # ==================================================================
+    # TAB 1: CALLING STATUS SUMMARY
+    # ==================================================================
+    with tab1:
+        f1, f2 = st.columns(2)
+        with f1:
+            cs_team = st.multiselect(
+                "Filter by Team", TEAM_ORDER, default=[], placeholder="All teams", key="cs_team"
+            )
+        with f2:
+            cs_attendance = st.selectbox(
+                "Attendance", ["All", "Attended (1)", "Not Attended (0)"], key="cs_attend"
+            )
+
+        df_cs = cascading_date_filter(df, "cs")
+
+        if cs_attendance == "Attended (1)":
+            df_cs = df_cs[df_cs["Attendance"] == 1]
+        elif cs_attendance == "Not Attended (0)":
+            df_cs = df_cs[df_cs["Attendance"] == 0]
+
+        selected_statuses = st.multiselect(
+            "Select statuses to display",
+            FOLLOWUP_STATUSES,
+            default=FOLLOWUP_STATUSES,
+            key="cs_statuses",
+        )
+
+        teams_show = cs_team if cs_team else TEAM_ORDER
+        if selected_statuses:
+            call_summary = build_calling_summary(df_cs, teams_to_show=teams_show, statuses=selected_statuses)
+            st.dataframe(style_summary_table(call_summary), use_container_width=True, hide_index=True, height=700)
+        else:
+            st.info("Select at least one status to display.")
+
+    # ==================================================================
+    # TAB 2: ALL LEADS
+    # ==================================================================
+    with tab2:
+        # --- Export Button at top ---
+        df_export_base = df.copy()
+        drop_cols = ["pk", "Preview Date Display", "Event Year", "Event Month"]
+        df_export_base = df_export_base.drop(columns=[c for c in drop_cols if c in df_export_base.columns])
+        buffer = io.BytesIO()
+        df_export_base.to_excel(buffer, index=False, sheet_name="Leads")
+        buffer.seek(0)
+        st.download_button(
+            label=f"Export All to Excel ({len(df_export_base)} rows)",
+            data=buffer,
+            file_name="WSAP_Leads_Export.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="al_export_btn",
+        )
+
+        fcol1, fcol2, fcol3 = st.columns(3)
+        with fcol1:
+            sp_filter = st.multiselect(
+                "Salesperson", sorted(SALESPERSONS.values()), default=[], placeholder="All", key="al_sp"
+            )
+        with fcol2:
+            st_filter = st.multiselect(
+                "Status", FOLLOWUP_STATUSES, default=[], placeholder="All", key="al_st"
+            )
+        with fcol3:
+            al_team = st.multiselect(
+                "Team", TEAM_ORDER, default=[], placeholder="All", key="al_team"
+            )
+
+        df_al = cascading_date_filter(df, "al")
+
+        search = st.text_input("Search name, company, or phone number", "", key="al_search")
+
+        df_v = df_al.copy()
+        if sp_filter:
+            df_v = df_v[df_v["Sales Person Name"].isin(sp_filter)]
+        if st_filter:
+            df_v = df_v[df_v["Follow-up Status"].isin(st_filter)]
+        if al_team:
+            team_members = []
+            for t in al_team:
+                team_members.extend(TEAMS.get(t, []))
+            df_v = df_v[df_v["Sales Person Name"].isin(team_members)]
+        if search:
+            s = search.strip()
+            m = (
+                df_v["Full Name"].astype(str).str.contains(s, case=False, na=False)
+                | df_v["Company Name"].astype(str).str.contains(s, case=False, na=False)
+                | df_v["Contact Number"].astype(str).str.contains(s, case=False, na=False)
+            )
+            df_v = df_v[m]
+
+        show_cols = ["Sales Person Name", "Sales Person Team"] + [c for c in DISPLAY_COLUMNS if c in df_v.columns]
+        st.dataframe(df_v[show_cols], use_container_width=True, hide_index=True, height=600)
+        st.caption(f"Showing {len(df_v)} of {len(df)}")
+
+        # --- Edit Salesperson ---
+        st.divider()
+        st.markdown("#### Reassign Salesperson")
+        edit_search = st.text_input("Search by name, company, phone, or ID to edit", "", key="edit_search")
+
+        if edit_search:
+            s = edit_search.strip()
+            mask = (
+                df_full["Full Name"].astype(str).str.contains(s, case=False, na=False)
+                | df_full["Company Name"].astype(str).str.contains(s, case=False, na=False)
+                | df_full["Contact Number"].astype(str).str.contains(s, case=False, na=False)
+                | df_full["ID"].astype(str).str.contains(s, case=False, na=False)
+            )
+            df_results = df_full[mask].head(20)
+
+            if df_results.empty:
+                st.info("No leads found.")
+            else:
+                st.caption(f"Found {len(df_results)} lead(s)")
+                for _, row in df_results.iterrows():
+                    pk = int(row["pk"])
+                    with st.expander(f"ID {row['ID']} — {row['Full Name']} ({row['Company Name']}) — currently: {row['Sales Person Name']}"):
+                        ec1, ec2 = st.columns(2)
+                        with ec1:
+                            new_sp = st.selectbox(
+                                "Sales Person",
+                                [""] + list(SALESPERSONS.values()),
+                                index=(list(SALESPERSONS.values()).index(row["Sales Person Name"]) + 1)
+                                if row["Sales Person Name"] in SALESPERSONS.values() else 0,
+                                key=f"edit_sp_{pk}",
+                            )
+                            new_status = st.selectbox(
+                                "Follow-up Status",
+                                FOLLOWUP_STATUSES,
+                                index=FOLLOWUP_STATUSES.index(row["Follow-up Status"])
+                                if row["Follow-up Status"] in FOLLOWUP_STATUSES else 0,
+                                key=f"edit_status_{pk}",
+                            )
+                        with ec2:
+                            new_remarks = st.text_area(
+                                "Remarks",
+                                value=str(row["Remarks"]) if pd.notna(row["Remarks"]) else "",
+                                key=f"edit_remarks_{pk}",
+                            )
+
+                        if st.button("Save", key=f"edit_save_{pk}", type="primary"):
+                            updates = {}
+                            if new_status != row["Follow-up Status"]:
+                                updates["followup_status"] = new_status
+                            if new_remarks != (str(row["Remarks"]) if pd.notna(row["Remarks"]) else ""):
+                                updates["remarks"] = new_remarks if new_remarks else None
+                            if new_sp and new_sp != row["Sales Person Name"]:
+                                sp_email = [e for e, n in SALESPERSONS.items() if n == new_sp]
+                                if sp_email:
+                                    updates["sales_person"] = sp_email[0]
+                                    updates["sales_person_name"] = new_sp
+                                    for team, members in TEAMS.items():
+                                        if new_sp in members:
+                                            updates["sales_person_team"] = team
+                                            break
+
+                            if updates:
+                                save_changes({pk: updates})
+                                st.success("Saved!")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.info("No changes detected.")
+
+    # ==================================================================
+    # TAB 3: CHARTS
+    # ==================================================================
+    with tab3:
+        st.markdown("### Custom Status Analysis")
+        st.caption("Select any combination of statuses to see the breakdown per salesperson")
+
+        selected_statuses = st.multiselect(
+            "Select statuses to analyse",
+            FOLLOWUP_STATUSES,
+            default=["Yet to call", "Unreached", "Follow Up", "Call Back"],
+            key="chart_custom_status",
+        )
+
+        if selected_statuses:
+            chart_team = st.multiselect(
+                "Filter by Team", TEAM_ORDER, default=[], placeholder="All teams", key="chart_team"
+            )
+
+            df_chart = cascading_date_filter(df, "chart")
+
+            if chart_team:
+                chart_members = []
+                for t in chart_team:
+                    chart_members.extend(TEAMS.get(t, []))
+                df_chart = df_chart[df_chart["Sales Person Name"].isin(chart_members)]
+
+            df_custom = df_chart[df_chart["Follow-up Status"].isin(selected_statuses)]
+            custom_counts = df_custom.groupby("Sales Person Name").size().reset_index(name="Count")
+            custom_counts = custom_counts.sort_values("Count", ascending=True)
+
+            total_in_group = custom_counts["Count"].sum()
+            st.metric("Total leads in selected statuses", total_in_group)
+
+            fig_custom = px.bar(
+                custom_counts, x="Count", y="Sales Person Name", orientation="h",
+                color="Count", color_continuous_scale="Reds",
+                labels={"Sales Person Name": "Salesperson"}, text_auto=True,
+            )
+            fig_custom.update_layout(height=max(350, len(custom_counts) * 35), showlegend=False)
+            st.plotly_chart(fig_custom, use_container_width=True)
+
+            custom_detail = df_custom.groupby(
+                ["Sales Person Name", "Follow-up Status"]
+            ).size().reset_index(name="Count")
+            fig_detail = px.bar(
+                custom_detail, x="Sales Person Name", y="Count", color="Follow-up Status",
+                barmode="stack", text_auto=True,
+                labels={"Sales Person Name": "Salesperson"},
+            )
+            fig_detail.update_layout(height=400, xaxis_tickangle=-45)
+            st.plotly_chart(fig_detail, use_container_width=True)
+
+    # ==================================================================
+    # TAB 4: DAILY REPORT
+    # ==================================================================
+    with tab4:
+        st.markdown("### Daily Report — Team KPI Cards")
+        st.caption("Screenshot-friendly summary for daily reporting")
+
+        dr1, dr2 = st.columns(2)
+        with dr1:
+            target_pct = st.slider(
+                "Calling Rate Target %", min_value=10, max_value=100, value=70, step=5,
+                key="dr_target",
+            )
+        with dr2:
+            dr_attendance = st.selectbox(
+                "Attendance", ["All", "Attended (1)", "Not Attended (0)"], key="dr_attend"
+            )
+
+        df_report = cascading_date_filter(df, "dr")
+
+        if dr_attendance == "Attended (1)":
+            df_report = df_report[df_report["Attendance"] == 1]
+        elif dr_attendance == "Not Attended (0)":
+            df_report = df_report[df_report["Attendance"] == 0]
+
+        st.divider()
+
+        for team in TEAM_ORDER:
+            members = TEAMS.get(team, [])
+            df_team = df_report[df_report["Sales Person Name"].isin(members)]
+            render_team_kpi_card(df_team, team, target_pct)
+
+    # ==================================================================
+    # TAB 5: UPLOAD NEW LEADS
+    # ==================================================================
+    with tab5:
+        st.markdown("### Upload New Leads")
+        st.caption("Upload a new Power App Excel download. Only new leads will be added (duplicates are skipped).")
+
+        uploaded_file = st.file_uploader("Drag & drop your Excel file here", type=["xlsx", "xls"], key="upload_file")
+
+        if uploaded_file:
+            try:
+                df_upload = pd.read_excel(uploaded_file)
+            except Exception as e:
+                st.error(f"Could not read file: {e}")
+                df_upload = None
+
+            if df_upload is not None:
+                # Check required columns
+                required = ["ID", "Company Name", "Sales Person"]
+                missing = [c for c in required if c not in df_upload.columns]
+                if missing:
+                    st.error(f"Missing required columns: {missing}")
+                    st.info(f"Your file has: {list(df_upload.columns)}")
+                else:
+                    st.success(f"File loaded: **{len(df_upload)}** rows")
+
+                    # Preview
+                    with st.expander("Preview uploaded data"):
+                        st.dataframe(df_upload.head(20), use_container_width=True, hide_index=True)
+
+                    # Find duplicates
+                    existing_keys = set()
+                    for _, row in df_full.iterrows():
+                        key = f"{row['ID']}|{str(row.get('Company Name', '')).strip().lower()}"
+                        existing_keys.add(key)
+
+                    new_rows = []
+                    for _, row in df_upload.iterrows():
+                        id_val = str(row.get("ID", "")).strip()
+                        company = str(row.get("Company Name", "")).strip().lower()
+                        key = f"{id_val}|{company}"
+                        if key not in existing_keys:
+                            new_rows.append(row)
+
+                    dupe_count = len(df_upload) - len(new_rows)
+
+                    st.markdown(f"""
+                    | | Count |
+                    |---|---|
+                    | Total rows in file | **{len(df_upload)}** |
+                    | Duplicates (will be skipped) | **{dupe_count}** |
+                    | **New leads to add** | **{len(new_rows)}** |
+                    """)
+
+                    if len(new_rows) == 0:
+                        st.info("All rows already exist in the database. Nothing to import.")
+                    else:
+                        if st.button(f"Import {len(new_rows)} new leads", type="primary", key="import_btn"):
+                            with st.spinner(f"Importing {len(new_rows)} leads..."):
+                                import numpy as np
+
+                                COLUMN_MAP = {
+                                    "ID": "id", "Full Name": "full_name", "Company Name": "company_name",
+                                    "Contact Number": "contact_number", "Email Address": "email_address",
+                                    "Designation": "designation", "Sales Person": "sales_person",
+                                    "Reminder Call PIC": "reminder_call_pic", "Concern": "concern",
+                                    "Leads": "leads", "utm_source": "utm_source", "utm_medium": "utm_medium",
+                                    "utm_campaign": "utm_campaign", "utm_term": "utm_term",
+                                    "utm_content": "utm_content", "Area": "area", "Revenue (M)": "revenue_m",
+                                    "HRDC": "hrdc", "Reference Link": "reference_link", "Industry": "industry",
+                                    "Created": "created_at", "Zoom Link": "zoom_link",
+                                    "Confirmation Status": "confirmation_status",
+                                    "Reminder Call Status": "reminder_call_status",
+                                    "Follow-up Status": "followup_status",
+                                    "Conversation Log": "conversation_log", "Attendance": "attendance",
+                                    "Preview Date": "preview_date", "Sales Person Name": "sales_person_name",
+                                    "Sales Person Team": "sales_person_team", "UTM Value": "utm_value",
+                                    "UTM Grouping": "utm_grouping", "Topic": "topic", "Remarks": "remarks",
+                                    "Duplicate Check": "duplicate_check", "Registered": "registered",
+                                    "Attended": "attended",
+                                }
+                                INT_COLS = ("id", "attendance", "registered")
+                                BOOL_COLS = ("leads", "hrdc")
+                                FLOAT_COLS = ("revenue_m", "attended")
+
+                                def _clean(val):
+                                    if val is None:
+                                        return None
+                                    if isinstance(val, (np.bool_,)):
+                                        return bool(val)
+                                    if isinstance(val, (np.integer,)):
+                                        return int(val)
+                                    if isinstance(val, (float, np.floating)):
+                                        try:
+                                            if np.isnan(val) or np.isinf(val):
+                                                return None
+                                        except (TypeError, ValueError):
+                                            pass
+                                        return float(val)
+                                    if isinstance(val, pd.Timestamp):
+                                        return val.strftime("%Y-%m-%d")
+                                    if isinstance(val, str):
+                                        val = val.strip()
+                                        if val in ("", "nan", "NaN", "None"):
+                                            return None
+                                        return val
+                                    if pd.isna(val):
+                                        return None
+                                    return val
+
+                                records = []
+                                for row_data in new_rows:
+                                    record = {}
+                                    for excel_col, db_col in COLUMN_MAP.items():
+                                        val = row_data.get(excel_col)
+                                        if excel_col == "Contact Number":
+                                            if val is None or (isinstance(val, float) and np.isnan(val)):
+                                                val = None
+                                            elif isinstance(val, (int, np.integer)):
+                                                val = str(val)
+                                            elif isinstance(val, float):
+                                                val = str(int(val))
+                                            else:
+                                                val = str(val).strip() if str(val).strip() not in ("", "nan") else None
+                                        else:
+                                            val = _clean(val)
+
+                                        if val is not None:
+                                            if db_col in INT_COLS:
+                                                try:
+                                                    val = int(float(val))
+                                                except (ValueError, TypeError):
+                                                    val = None
+                                            elif db_col in BOOL_COLS:
+                                                try:
+                                                    val = bool(int(float(val))) if not isinstance(val, bool) else val
+                                                except (ValueError, TypeError):
+                                                    val = False
+                                            elif db_col in FLOAT_COLS:
+                                                try:
+                                                    val = float(val)
+                                                except (ValueError, TypeError):
+                                                    val = None
+                                        record[db_col] = val
+
+                                    # Auto-fill name & team
+                                    if not record.get("sales_person_name") and record.get("sales_person"):
+                                        email = record["sales_person"].lower()
+                                        name_map = {k.lower(): v for k, v in SALESPERSONS.items()}
+                                        record["sales_person_name"] = name_map.get(email, "")
+                                    if not record.get("sales_person_team") and record.get("sales_person_name"):
+                                        for t, m in TEAMS.items():
+                                            if record["sales_person_name"] in m:
+                                                record["sales_person_team"] = t
+                                                break
+                                    if not record.get("followup_status"):
+                                        record["followup_status"] = "Yet to call"
+
+                                    records.append(record)
+
+                                # Insert in batches
+                                supabase = get_supabase()
+                                batch_size = 500
+                                for i in range(0, len(records), batch_size):
+                                    batch = records[i : i + batch_size]
+                                    supabase.table("leads").insert(batch).execute()
+
+                                load_data.clear()
+                                st.success(f"Done! **{len(records)}** new leads imported.")
+                                time.sleep(2)
+                                st.rerun()
+
+
+# ==============================================================================
+# MAIN
+# ==============================================================================
+
+
+def main():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.error("Supabase configuration missing.")
+        st.info("Add SUPABASE_URL and SUPABASE_KEY to your Streamlit secrets.")
+        st.stop()
+
+    if "user_email" not in st.session_state:
+        login_page()
+        return
+
+    user_email = st.session_state["user_email"]
+    user_name = st.session_state["user_name"]
+    is_admin = st.session_state.get("is_admin", False)
+    is_manager = st.session_state.get("is_manager", False)
+
+    with st.sidebar:
+        st.markdown(f"**{user_name}**")
+        if is_admin:
+            st.caption("Admin")
+        elif is_manager:
+            st.caption(f"Manager — {st.session_state.get('manager_team', '')}")
+        else:
+            st.caption("Salesperson")
+        if st.button("Logout", use_container_width=True):
+            for key in ["user_email", "user_name", "is_admin", "is_manager", "manager_team"]:
+                st.session_state.pop(key, None)
+            st.rerun()
+
+    if is_admin:
+        admin_view()
+    elif is_manager:
+        manager_view(user_email, user_name, st.session_state["manager_team"])
+    else:
+        salesperson_view(user_email, user_name)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,11 @@
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+*.xlsx
+app_local.py
+app.py
+graph_helper.py
+split_leads.py
+add_new_leads.py
+import_to_supabase.py
+supabase_setup.sql
