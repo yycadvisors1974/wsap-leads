@@ -573,8 +573,14 @@ def salesperson_view(user_email: str, user_name: str):
     elif revenue_sort == "Revenue: Low to High":
         df_display = df_display.sort_values("Revenue (M)", ascending=True, na_position="last")
 
-    all_cols = [c for c in SP_DEFAULT_COLUMNS if c in df_display.columns]
-    df_edit = df_display[["pk"] + all_cols].copy()
+    # Column picker — default columns pre-selected, others available to add
+    available_cols = [c for c in DISPLAY_COLUMNS if c in df_display.columns]
+    default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
+    selected_cols = st.multiselect(
+        "Columns to show", available_cols, default=default_cols, key="sp_cols"
+    )
+    show_cols = selected_cols if selected_cols else default_cols
+    df_edit = df_display[["pk"] + show_cols].copy()
 
     # --- Export button ---
     from datetime import date
