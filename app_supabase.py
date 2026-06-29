@@ -941,6 +941,7 @@ def admin_view():
                 color="Count", color_continuous_scale="Reds",
                 labels={"Sales Person Name": "Salesperson"}, text_auto=True,
             )
+            fig_custom.update_traces(textposition="outside", textangle=0)
             fig_custom.update_layout(height=max(350, len(custom_counts) * 35), showlegend=False)
             st.plotly_chart(fig_custom, use_container_width=True)
 
