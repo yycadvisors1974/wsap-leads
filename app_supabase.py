@@ -476,12 +476,13 @@ def login_page():
 # ==============================================================================
 
 
-def salesperson_view(user_email: str, user_name: str):
-    hcol1, hcol2 = st.columns([3, 1])
-    with hcol1:
-        st.markdown(f"## {user_name}'s Leads")
-    with hcol2:
-        st.button("Refresh", on_click=load_data.clear, key="sp_refresh")
+def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
+    if show_header:
+        hcol1, hcol2 = st.columns([3, 1])
+        with hcol1:
+            st.markdown(f"## {user_name}'s Leads")
+        with hcol2:
+            st.button("Refresh", on_click=load_data.clear, key="sp_refresh")
 
     df_full = load_data()
     df_sp = df_full[df_full["Sales Person"].str.lower() == user_email.lower()].copy()
@@ -515,6 +516,8 @@ def salesperson_view(user_email: str, user_name: str):
         df_sp_month = df_sp_month[df_sp_month["Event Month"].isin(month_filter)]
 
     # --- Filters Row 2 ---
+    available_cols = [c for c in DISPLAY_COLUMNS if c in df_sp.columns]
+    default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
     fcol4, fcol5, fcol6 = st.columns(3)
     with fcol4:
         sp_date_labels = df_sp_month[["Event Date Label", "Preview Date Display"]].dropna().drop_duplicates("Event Date Label")
@@ -524,19 +527,8 @@ def salesperson_view(user_email: str, user_name: str):
             "Event Date", sp_dates_sorted, default=[], placeholder="All dates", key="sp_event"
         )
     with fcol5:
-        search = st.text_input("Search name, company, or phone", "", key="sp_search")
+        search = st.text_input("Search (name, company, phone, or log)", "", key="sp_search")
     with fcol6:
-        log_search = st.text_input("Search conversation log", "", key="sp_log")
-
-    # --- Filters Row 3 ---
-    available_cols = [c for c in DISPLAY_COLUMNS if c in df_sp.columns]
-    default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
-    fcol7, fcol8 = st.columns(2)
-    with fcol7:
-        revenue_sort = st.selectbox(
-            "Sort by Revenue", ["Default", "Revenue: High to Low", "Revenue: Low to High"], key="sp_rev"
-        )
-    with fcol8:
         selected_cols = st.multiselect(
             "Columns to show", available_cols, default=default_cols, key="sp_cols"
         )
@@ -569,16 +561,9 @@ def salesperson_view(user_email: str, user_name: str):
             df_display["Full Name"].astype(str).str.contains(s, case=False, na=False)
             | df_display["Company Name"].astype(str).str.contains(s, case=False, na=False)
             | df_display["Contact Number"].astype(str).str.contains(s, case=False, na=False)
+            | df_display["Conversation Log"].astype(str).str.contains(s, case=False, na=False)
         )
         df_display = df_display[mask]
-    if log_search:
-        df_display = df_display[
-            df_display["Conversation Log"].astype(str).str.contains(log_search, case=False, na=False)
-        ]
-    if revenue_sort == "Revenue: High to Low":
-        df_display = df_display.sort_values("Revenue (M)", ascending=False, na_position="last")
-    elif revenue_sort == "Revenue: Low to High":
-        df_display = df_display.sort_values("Revenue (M)", ascending=True, na_position="last")
 
     show_cols = selected_cols if selected_cols else default_cols
     df_edit = df_display[["pk"] + show_cols].copy()
@@ -680,7 +665,7 @@ def manager_view(user_email: str, user_name: str, team_name: str):
     tab_leads, tab_team = st.tabs(["My Leads", "Team Overview"])
 
     with tab_leads:
-        salesperson_view(user_email, user_name)
+        salesperson_view(user_email, user_name, show_header=False)
 
     with tab_team:
         df_full = load_data()
@@ -792,8 +777,10 @@ def admin_view():
 
         fcol1, fcol2, fcol3 = st.columns(3)
         with fcol1:
+            all_sp_names = sorted(df["Sales Person Name"].dropna().unique())
+            all_sp_names = [n for n in all_sp_names if n.strip()]
             sp_filter = st.multiselect(
-                "Salesperson", sorted(SALESPERSONS.values()), default=[], placeholder="All", key="al_sp"
+                "Salesperson", all_sp_names, default=[], placeholder="All", key="al_sp"
             )
         with fcol2:
             st_filter = st.multiselect(
