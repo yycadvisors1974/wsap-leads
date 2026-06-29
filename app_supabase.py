@@ -108,18 +108,11 @@ DISPLAY_COLUMNS = [
     "Revenue (M)", "Duplicate Check", "Registered", "Attended",
 ]
 
-# Columns shown by default in salesperson view (others can be toggled on)
+# Columns shown by default in salesperson view
 SP_DEFAULT_COLUMNS = [
     "Full Name", "Company Name", "Contact Number",
     "Designation", "Follow-up Status", "Remarks",
-    "Conversation Log", "Duplicate Check", "Registered", "Attended",
-    "Revenue (M)",
-]
-
-# Additional columns salesperson can toggle on
-SP_EXTRA_COLUMNS = [
-    "ID", "Email Address", "Preview Date", "Topic",
-    "Attendance", "Concern", "Area", "Industry",
+    "Revenue (M)", "Registered", "Attended",
 ]
 
 # Supabase column name → Display column name
@@ -246,7 +239,19 @@ def load_data() -> pd.DataFrame:
         dt = pd.to_datetime(df["Preview Date"], errors="coerce")
         df["Preview Date Display"] = dt.dt.strftime("%Y-%m-%d").fillna("")
         df["Event Year"] = dt.dt.year.astype("Int64").astype(str).replace("<NA>", "")
-        df["Event Month"] = dt.dt.strftime("%Y-%m").fillna("")
+        df["Event Month"] = dt.dt.strftime("%B %Y").fillna("")
+        # Build "23/6/2026 (CASH)" label for date filters
+        topic_part = df["Topic"].fillna("").astype(str).str.strip()
+        has_date = dt.notna()
+        df["Event Date Label"] = ""
+        if has_date.any():
+            day = dt[has_date].dt.day.astype(int).astype(str)
+            month = dt[has_date].dt.month.astype(int).astype(str)
+            year = dt[has_date].dt.year.astype(int).astype(str)
+            df.loc[has_date, "Event Date Label"] = (
+                day + "/" + month + "/" + year
+                + " (" + topic_part[has_date] + ")"
+            )
 
     return df
 
@@ -282,21 +287,27 @@ def cascading_date_filter(df: pd.DataFrame, key_prefix: str):
     if sel_year:
         df_y = df_y[df_y["Event Year"].isin(sel_year)]
 
-    all_months = sorted([m for m in df_y["Event Month"].dropna().unique() if m])
+    # Sort months by underlying date, display in words (e.g., "June 2026")
+    month_dates = df_y[["Event Month", "Preview Date Display"]].dropna().drop_duplicates("Event Month")
+    month_dates = month_dates[month_dates["Event Month"] != ""]
+    month_sorted = month_dates.sort_values("Preview Date Display")["Event Month"].tolist()
     with c2:
-        sel_month = st.multiselect("Month", all_months, default=[], placeholder="All months", key=f"{key_prefix}_month")
+        sel_month = st.multiselect("Month", month_sorted, default=[], placeholder="All months", key=f"{key_prefix}_month")
 
     df_m = df_y.copy()
     if sel_month:
         df_m = df_m[df_m["Event Month"].isin(sel_month)]
 
-    all_dates = sorted([d for d in df_m["Preview Date Display"].dropna().unique() if d])
+    # Sort date labels by underlying date, display with topic (e.g., "23/6/2026 (CASH)")
+    date_labels = df_m[["Event Date Label", "Preview Date Display"]].dropna().drop_duplicates("Event Date Label")
+    date_labels = date_labels[date_labels["Event Date Label"] != ""]
+    date_sorted = date_labels.sort_values("Preview Date Display")["Event Date Label"].tolist()
     with c3:
-        sel_date = st.multiselect("Event Date", all_dates, default=[], placeholder="All dates", key=f"{key_prefix}_date")
+        sel_date = st.multiselect("Event Date", date_sorted, default=[], placeholder="All dates", key=f"{key_prefix}_date")
 
     df_result = df_m.copy()
     if sel_date:
-        df_result = df_result[df_result["Preview Date Display"].isin(sel_date)]
+        df_result = df_result[df_result["Event Date Label"].isin(sel_date)]
 
     return df_result
 
@@ -409,7 +420,7 @@ def render_team_kpi_card(df_team: pd.DataFrame, team_name: str, target_pct: int)
             UR, Call Back, Yet to Call : <b>{not_called}</b>
         </div>
         <div style="font-size: 12px; color: #aab; margin-top: 8px;">
-            {person_line}
+            No. of Leads Called : {person_line}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -490,9 +501,26 @@ def salesperson_view(user_email: str, user_name: str):
             "Filter by Status", FOLLOWUP_STATUSES, default=[], placeholder="All statuses", key="sp_status"
         )
     with fcol0c:
-        event_dates = sorted([d for d in df_sp["Preview Date Display"].dropna().unique() if d])
+        # Month filter (words, e.g., "June 2026")
+        sp_month_dates = df_sp[["Event Month", "Preview Date Display"]].dropna().drop_duplicates("Event Month")
+        sp_month_dates = sp_month_dates[sp_month_dates["Event Month"] != ""]
+        sp_months_sorted = sp_month_dates.sort_values("Preview Date Display")["Event Month"].tolist()
+        month_filter = st.multiselect(
+            "Month", sp_months_sorted, default=[], placeholder="All months", key="sp_month"
+        )
+
+    # Cascading: filter by month first to populate event date options
+    df_sp_month = df_sp.copy()
+    if month_filter:
+        df_sp_month = df_sp_month[df_sp_month["Event Month"].isin(month_filter)]
+
+    fcol0d_col1, fcol0d_col2, fcol0d_col3 = st.columns(3)
+    with fcol0d_col1:
+        sp_date_labels = df_sp_month[["Event Date Label", "Preview Date Display"]].dropna().drop_duplicates("Event Date Label")
+        sp_date_labels = sp_date_labels[sp_date_labels["Event Date Label"] != ""]
+        sp_dates_sorted = sp_date_labels.sort_values("Preview Date Display")["Event Date Label"].tolist()
         event_filter = st.multiselect(
-            "Filter by Event Date", event_dates, default=[], placeholder="All events", key="sp_event"
+            "Event Date", sp_dates_sorted, default=[], placeholder="All dates", key="sp_event"
         )
 
     # --- Filters Row 2 ---
@@ -522,10 +550,12 @@ def salesperson_view(user_email: str, user_name: str):
         cols[i].metric(status, status_counts.get(status, 0))
     st.caption(f"Total: **{total}** leads")
     st.divider()
+    if month_filter:
+        df_display = df_display[df_display["Event Month"].isin(month_filter)]
     if status_filter:
         df_display = df_display[df_display["Follow-up Status"].isin(status_filter)]
     if event_filter:
-        df_display = df_display[df_display["Preview Date Display"].isin(event_filter)]
+        df_display = df_display[df_display["Event Date Label"].isin(event_filter)]
     if search:
         s = search.strip()
         mask = (
@@ -543,8 +573,22 @@ def salesperson_view(user_email: str, user_name: str):
     elif revenue_sort == "Revenue: Low to High":
         df_display = df_display.sort_values("Revenue (M)", ascending=True, na_position="last")
 
-    all_cols = [c for c in DISPLAY_COLUMNS if c in df_display.columns]
+    all_cols = [c for c in SP_DEFAULT_COLUMNS if c in df_display.columns]
     df_edit = df_display[["pk"] + all_cols].copy()
+
+    # --- Export button ---
+    from datetime import date
+    sp_export = df_display[[c for c in DISPLAY_COLUMNS if c in df_display.columns]].copy()
+    sp_buffer = io.BytesIO()
+    sp_export.to_excel(sp_buffer, index=False, sheet_name="My Leads")
+    sp_buffer.seek(0)
+    st.download_button(
+        label=f"Export My Leads ({len(sp_export)} rows)",
+        data=sp_buffer,
+        file_name=f"My_Leads_{user_name}_{date.today().strftime('%Y-%m-%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="sp_export_btn",
+    )
 
     st.markdown(f"**Showing {len(df_edit)} leads** — edit Follow-up Status & Remarks, then click Save.")
 
@@ -676,9 +720,9 @@ def admin_view():
         st.button("Refresh", on_click=load_data.clear, key="admin_refresh")
 
     df_full = load_data()
-    df = get_assigned_leads(df_full)
+    df = df_full.copy()
 
-    st.caption(f"**{len(df)}** leads across **{len(SALESPERSONS)}** salespersons")
+    st.caption(f"**{len(df)}** total leads")
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Calling Status", "All Leads", "Charts", "Daily Report", "Upload New Leads"
@@ -725,15 +769,16 @@ def admin_view():
     with tab2:
         # --- Export Button at top ---
         df_export_base = df.copy()
-        drop_cols = ["pk", "Preview Date Display", "Event Year", "Event Month"]
+        drop_cols = ["pk", "Preview Date Display", "Event Year", "Event Month", "Event Date Label"]
         df_export_base = df_export_base.drop(columns=[c for c in drop_cols if c in df_export_base.columns])
         buffer = io.BytesIO()
         df_export_base.to_excel(buffer, index=False, sheet_name="Leads")
         buffer.seek(0)
+        from datetime import date as _date
         st.download_button(
             label=f"Export All to Excel ({len(df_export_base)} rows)",
             data=buffer,
-            file_name="WSAP_Leads_Export.xlsx",
+            file_name=f"WSAP_Leads_Export_{_date.today().strftime('%Y-%m-%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="al_export_btn",
         )
@@ -749,7 +794,7 @@ def admin_view():
             )
         with fcol3:
             al_team = st.multiselect(
-                "Team", TEAM_ORDER, default=[], placeholder="All", key="al_team"
+                "Team", TEAM_ORDER + ["Unassigned"], default=[], placeholder="All", key="al_team"
             )
 
         df_al = cascading_date_filter(df, "al")
@@ -763,9 +808,18 @@ def admin_view():
             df_v = df_v[df_v["Follow-up Status"].isin(st_filter)]
         if al_team:
             team_members = []
+            include_unassigned = False
             for t in al_team:
-                team_members.extend(TEAMS.get(t, []))
-            df_v = df_v[df_v["Sales Person Name"].isin(team_members)]
+                if t == "Unassigned":
+                    include_unassigned = True
+                else:
+                    team_members.extend(TEAMS.get(t, []))
+            if include_unassigned and team_members:
+                df_v = df_v[(df_v["Sales Person Name"].isin(team_members)) | (df_v["Sales Person Name"] == "")]
+            elif include_unassigned:
+                df_v = df_v[df_v["Sales Person Name"] == ""]
+            else:
+                df_v = df_v[df_v["Sales Person Name"].isin(team_members)]
         if search:
             s = search.strip()
             m = (
