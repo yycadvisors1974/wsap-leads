@@ -514,24 +514,31 @@ def salesperson_view(user_email: str, user_name: str):
     if month_filter:
         df_sp_month = df_sp_month[df_sp_month["Event Month"].isin(month_filter)]
 
-    fcol0d_col1, fcol0d_col2, fcol0d_col3 = st.columns(3)
-    with fcol0d_col1:
+    # --- Filters Row 2 ---
+    fcol4, fcol5, fcol6 = st.columns(3)
+    with fcol4:
         sp_date_labels = df_sp_month[["Event Date Label", "Preview Date Display"]].dropna().drop_duplicates("Event Date Label")
         sp_date_labels = sp_date_labels[sp_date_labels["Event Date Label"] != ""]
         sp_dates_sorted = sp_date_labels.sort_values("Preview Date Display")["Event Date Label"].tolist()
         event_filter = st.multiselect(
             "Event Date", sp_dates_sorted, default=[], placeholder="All dates", key="sp_event"
         )
-
-    # --- Filters Row 2 ---
-    fcol4, fcol5, fcol6 = st.columns(3)
-    with fcol4:
-        search = st.text_input("Search name, company, or phone", "", key="sp_search")
     with fcol5:
-        log_search = st.text_input("Search conversation log", "", key="sp_log")
+        search = st.text_input("Search name, company, or phone", "", key="sp_search")
     with fcol6:
+        log_search = st.text_input("Search conversation log", "", key="sp_log")
+
+    # --- Filters Row 3 ---
+    available_cols = [c for c in DISPLAY_COLUMNS if c in df_sp.columns]
+    default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
+    fcol7, fcol8 = st.columns(2)
+    with fcol7:
         revenue_sort = st.selectbox(
             "Sort by Revenue", ["Default", "Revenue: High to Low", "Revenue: Low to High"], key="sp_rev"
+        )
+    with fcol8:
+        selected_cols = st.multiselect(
+            "Columns to show", available_cols, default=default_cols, key="sp_cols"
         )
 
     # --- Apply Filters ---
@@ -573,12 +580,6 @@ def salesperson_view(user_email: str, user_name: str):
     elif revenue_sort == "Revenue: Low to High":
         df_display = df_display.sort_values("Revenue (M)", ascending=True, na_position="last")
 
-    # Column picker — default columns pre-selected, others available to add
-    available_cols = [c for c in DISPLAY_COLUMNS if c in df_display.columns]
-    default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
-    selected_cols = st.multiselect(
-        "Columns to show", available_cols, default=default_cols, key="sp_cols"
-    )
     show_cols = selected_cols if selected_cols else default_cols
     df_edit = df_display[["pk"] + show_cols].copy()
 
