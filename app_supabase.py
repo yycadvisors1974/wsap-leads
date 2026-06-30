@@ -1214,6 +1214,131 @@ def admin_view():
                             else:
                                 st.info("No changes detected.")
 
+        # --- Bulk Reassign ---
+        st.divider()
+        st.markdown("#### Bulk Reassign")
+        st.caption("Use this to reassign multiple leads at once (e.g., when a salesperson resigns).")
+
+        ab1, ab2, ab3 = st.columns(3)
+        with ab1:
+            all_sp_for_bulk = sorted(df["Sales Person Name"].dropna().unique())
+            all_sp_for_bulk = [n for n in all_sp_for_bulk if n.strip()]
+            admin_bulk_from = st.multiselect(
+                "From Salesperson", all_sp_for_bulk, default=[], placeholder="Select",
+                key="admin_bulk_from"
+            )
+        with ab2:
+            admin_bulk_status = st.multiselect(
+                "Filter by Status", FOLLOWUP_STATUSES, default=[],
+                placeholder="All statuses", key="admin_bulk_status"
+            )
+        with ab3:
+            admin_bulk_team = st.multiselect(
+                "Filter by Team", TEAM_ORDER + ["Unassigned"], default=[],
+                placeholder="All teams", key="admin_bulk_team"
+            )
+
+        if admin_bulk_from or admin_bulk_status or admin_bulk_team:
+            df_ab = df.copy()
+            if admin_bulk_from:
+                df_ab = df_ab[df_ab["Sales Person Name"].isin(admin_bulk_from)]
+            if admin_bulk_status:
+                df_ab = df_ab[df_ab["Follow-up Status"].isin(admin_bulk_status)]
+            if admin_bulk_team:
+                ab_members = []
+                ab_unassigned = False
+                for t in admin_bulk_team:
+                    if t == "Unassigned":
+                        ab_unassigned = True
+                    else:
+                        ab_members.extend(TEAMS.get(t, []))
+                if ab_unassigned and ab_members:
+                    df_ab = df_ab[(df_ab["Sales Person Name"].isin(ab_members)) | (df_ab["Sales Person Name"] == "")]
+                elif ab_unassigned:
+                    df_ab = df_ab[df_ab["Sales Person Name"] == ""]
+                elif ab_members:
+                    df_ab = df_ab[df_ab["Sales Person Name"].isin(ab_members)]
+
+            ab_table = df_ab[["pk", "ID", "Full Name", "Company Name", "Contact Number",
+                              "Sales Person Name", "Event Date Label", "Follow-up Status"]].copy()
+            ab_table.insert(0, "Select", False)
+
+            st.caption(f"**{len(ab_table)}** leads match. Tick the ones to reassign.")
+
+            edited_ab = st.data_editor(
+                ab_table,
+                column_config={
+                    "pk": None,
+                    "Select": st.column_config.CheckboxColumn("✓", width="small"),
+                    "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                    "Full Name": st.column_config.TextColumn("Name", disabled=True, width="medium"),
+                    "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
+                    "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
+                    "Sales Person Name": st.column_config.TextColumn("Current SP", disabled=True, width="small"),
+                    "Event Date Label": st.column_config.TextColumn("Event", disabled=True, width="medium"),
+                    "Follow-up Status": st.column_config.TextColumn("Status", disabled=True, width="small"),
+                },
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                height=400,
+                key="admin_bulk_editor",
+            )
+
+            ab_selected = edited_ab[edited_ab["Select"] == True]
+            ab_count = len(ab_selected)
+
+            if ab_count > 0:
+                st.caption(f"**{ab_count}** lead(s) selected")
+
+                abc1, abc2 = st.columns(2)
+                with abc1:
+                    admin_bulk_target = st.selectbox(
+                        "Reassign to", sorted(SALESPERSONS.values()), key="admin_bulk_target"
+                    )
+                with abc2:
+                    admin_bulk_remark = st.checkbox(
+                        "Append reassign remark", value=True, key="admin_bulk_remark"
+                    )
+
+                if st.button(f"Reassign {ab_count} Lead(s) Now", key="admin_bulk_go", type="primary"):
+                    from datetime import datetime
+                    now = datetime.now()
+                    to_email = [e for e, n in SALESPERSONS.items() if n == admin_bulk_target][0]
+                    to_team = ""
+                    for team, members in TEAMS.items():
+                        if admin_bulk_target in members:
+                            to_team = team
+                            break
+
+                    changes = {}
+                    for _, row in ab_selected.iterrows():
+                        pk = int(row["pk"])
+                        from_name = str(row["Sales Person Name"]).strip()
+                        fs = str(row["Follow-up Status"]).strip()
+                        updates = {
+                            "sales_person": to_email,
+                            "sales_person_name": admin_bulk_target,
+                            "sales_person_team": to_team,
+                        }
+                        if admin_bulk_remark and from_name:
+                            status_abbr = "UR" if fs == "Unreached" else fs
+                            remark_suffix = f"reassign from {from_name.lower()}-{status_abbr} {now.day}/{now.month}"
+                            # Fetch current remarks
+                            supabase = get_supabase()
+                            lead_resp = supabase.table("leads").select("remarks").eq("pk", pk).execute()
+                            existing = (lead_resp.data[0].get("remarks") or "") if lead_resp.data else ""
+                            updates["remarks"] = f"{existing}, {remark_suffix}".strip(", ") if existing else remark_suffix
+                        changes[pk] = updates
+
+                    with st.spinner(f"Reassigning {ab_count} leads..."):
+                        save_changes(changes)
+                    st.success(f"Done! {ab_count} lead(s) reassigned to {admin_bulk_target}.")
+                    time.sleep(1)
+                    st.rerun()
+        else:
+            st.info("Select a filter above to see leads for bulk reassignment.")
+
     # ==================================================================
     # TAB 3: CHARTS
     # ==================================================================
