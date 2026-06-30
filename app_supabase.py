@@ -272,6 +272,130 @@ def get_assigned_leads(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ==============================================================================
+# REASSIGN REQUESTS
+# ==============================================================================
+
+
+def load_reassign_requests(from_email=None, status_filter=None, to_email=None, unseen_only=False):
+    """Fetch reassign requests from Supabase (never cached)."""
+    supabase = get_supabase()
+    query = supabase.table("reassign_requests").select("*").order("created_at", desc=True)
+    if from_email:
+        query = query.eq("from_sp_email", from_email)
+    if status_filter:
+        query = query.eq("status", status_filter)
+    if to_email:
+        query = query.eq("to_sp_email", to_email)
+    if unseen_only:
+        query = query.eq("seen_by_recipient", False)
+    resp = query.execute()
+    return resp.data
+
+
+def submit_reassign_request(lead_pk, lead_name, lead_company, from_email, from_name,
+                            to_email, to_name, reason, current_status):
+    """Submit a reassign request. Returns (success, message)."""
+    supabase = get_supabase()
+
+    # Guard: no duplicate pending request for same lead
+    existing = supabase.table("reassign_requests").select("id") \
+        .eq("lead_pk", lead_pk).eq("status", "Pending").execute()
+    if existing.data:
+        return False, "A pending request already exists for this lead."
+
+    supabase.table("reassign_requests").insert({
+        "lead_pk": lead_pk,
+        "lead_name": lead_name,
+        "lead_company": lead_company,
+        "from_sp_email": from_email,
+        "from_sp_name": from_name,
+        "to_sp_email": to_email,
+        "to_sp_name": to_name,
+        "reason": reason,
+        "status": "Pending",
+        "current_followup_status": current_status,
+    }).execute()
+    return True, "Request submitted! Admin will review it."
+
+
+def process_reassign_request(request_id, action, reject_reason=None):
+    """Approve or reject a reassign request. Returns (success, message)."""
+    from datetime import datetime
+    supabase = get_supabase()
+
+    # Guard: verify still Pending
+    req = supabase.table("reassign_requests").select("*").eq("id", request_id).execute()
+    if not req.data:
+        return False, "Request not found."
+    req = req.data[0]
+    if req["status"] != "Pending":
+        return False, f"Request already {req['status']}."
+
+    now = datetime.now()
+
+    if action == "Rejected":
+        supabase.table("reassign_requests").update({
+            "status": "Rejected",
+            "reject_reason": reject_reason or "",
+            "reviewed_at": now.isoformat(),
+        }).eq("id", request_id).execute()
+        return True, "Request rejected."
+
+    # Approved — update the lead
+    lead_pk = req["lead_pk"]
+    lead_resp = supabase.table("leads").select("pk,sales_person,remarks").eq("pk", lead_pk).execute()
+    if not lead_resp.data:
+        supabase.table("reassign_requests").update({
+            "status": "Rejected",
+            "reject_reason": "Lead no longer exists.",
+            "reviewed_at": now.isoformat(),
+        }).eq("id", request_id).execute()
+        return False, "Lead no longer exists. Request auto-rejected."
+
+    lead = lead_resp.data[0]
+    to_email = req["to_sp_email"]
+    to_name = req["to_sp_name"]
+    from_name = req["from_sp_name"]
+    fs = req["current_followup_status"] or ""
+
+    # Find team for target salesperson
+    to_team = ""
+    for team, members in TEAMS.items():
+        if to_name in members:
+            to_team = team
+            break
+
+    # Build remark: "reassign from david-UR 29/6"
+    status_abbr = "UR" if fs == "Unreached" else fs
+    remark_suffix = f"reassign from {from_name.lower()}-{status_abbr} {now.day}/{now.month}"
+    existing_remarks = lead.get("remarks") or ""
+    new_remarks = f"{existing_remarks}, {remark_suffix}".strip(", ") if existing_remarks else remark_suffix
+
+    # Update lead
+    save_changes({lead_pk: {
+        "sales_person": to_email,
+        "sales_person_name": to_name,
+        "sales_person_team": to_team,
+        "remarks": new_remarks,
+    }})
+
+    # Mark request as approved
+    supabase.table("reassign_requests").update({
+        "status": "Approved",
+        "reviewed_at": now.isoformat(),
+    }).eq("id", request_id).execute()
+
+    return True, f"Approved! Lead reassigned to {to_name}."
+
+
+def dismiss_reassign_notifications(request_ids):
+    """Mark reassign notifications as seen by recipient."""
+    supabase = get_supabase()
+    for rid in request_ids:
+        supabase.table("reassign_requests").update({"seen_by_recipient": True}).eq("id", rid).execute()
+
+
+# ==============================================================================
 # CASCADING DATE FILTER
 # ==============================================================================
 
@@ -488,6 +612,16 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
     df_full = load_data()
     df_sp = df_full[df_full["Sales Person"].str.lower() == user_email.lower()].copy()
 
+    # --- One-time banner for newly reassigned leads ---
+    unseen = load_reassign_requests(to_email=user_email, status_filter="Approved", unseen_only=True)
+    if unseen:
+        lead_names = ", ".join(f"{r['lead_name']} ({r['lead_company']})" for r in unseen[:5])
+        extra = f" and {len(unseen) - 5} more" if len(unseen) > 5 else ""
+        st.info(f"📋 **{len(unseen)} lead(s) recently reassigned to you:** {lead_names}{extra}")
+        if st.button("Dismiss", key=f"dismiss_reassign_{user_email}"):
+            dismiss_reassign_notifications([r["id"] for r in unseen])
+            st.rerun()
+
     if df_sp.empty:
         st.warning("No leads found for your account.")
         return
@@ -657,6 +791,67 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
         else:
             st.info("No changes detected.")
 
+    # --- Request Lead Reassignment ---
+    st.divider()
+    st.markdown("### Request Lead Reassignment")
+
+    # Show pending count
+    my_pending = load_reassign_requests(from_email=user_email, status_filter="Pending")
+    if my_pending:
+        st.caption(f"You have **{len(my_pending)}** pending request(s) awaiting admin approval.")
+
+    ra_search = st.text_input("Search your lead (name, company, or ID)", "", key=f"ra_search_{user_email}")
+
+    if ra_search:
+        s = ra_search.strip()
+        ra_mask = (
+            df_sp["Full Name"].astype(str).str.contains(s, case=False, na=False)
+            | df_sp["Company Name"].astype(str).str.contains(s, case=False, na=False)
+            | df_sp["ID"].astype(str).str.contains(s, case=False, na=False)
+        )
+        ra_results = df_sp[ra_mask].head(20)
+
+        if ra_results.empty:
+            st.info("No matching leads found.")
+        else:
+            lead_options = {
+                f"{int(r['ID'])} - {r['Full Name']} ({r['Company Name']})": r
+                for _, r in ra_results.iterrows()
+            }
+            selected_lead = st.selectbox(
+                "Select lead", list(lead_options.keys()), key=f"ra_lead_{user_email}"
+            )
+
+            # Target salesperson (exclude self)
+            sp_names = sorted([n for n in SALESPERSONS.values() if n != user_name])
+            target_sp = st.selectbox("Reassign to", sp_names, key=f"ra_target_{user_email}")
+
+            ra_reason = st.text_input("Reason (required)", "", key=f"ra_reason_{user_email}")
+
+            if st.button("Submit Request", key=f"ra_submit_{user_email}", type="primary"):
+                if not ra_reason.strip():
+                    st.error("Please provide a reason.")
+                else:
+                    lead_row = lead_options[selected_lead]
+                    to_email_addr = [e for e, n in SALESPERSONS.items() if n == target_sp][0]
+                    success, msg = submit_reassign_request(
+                        lead_pk=int(lead_row["pk"]),
+                        lead_name=str(lead_row["Full Name"]),
+                        lead_company=str(lead_row["Company Name"]),
+                        from_email=user_email,
+                        from_name=user_name,
+                        to_email=to_email_addr,
+                        to_name=target_sp,
+                        reason=ra_reason.strip(),
+                        current_status=str(lead_row.get("Follow-up Status", "")),
+                    )
+                    if success:
+                        st.success(msg)
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.warning(msg)
+
 
 # ==============================================================================
 # MANAGER VIEW
@@ -724,8 +919,13 @@ def admin_view():
 
     st.caption(f"**{len(df)}** total leads")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Calling Status", "All Leads", "Charts", "Daily Report", "Upload New Leads"
+    # Fetch pending reassign count for tab label
+    pending_reassign = load_reassign_requests(status_filter="Pending")
+    pending_count = len(pending_reassign)
+    reassign_label = f"Reassign Requests ({pending_count})" if pending_count else "Reassign Requests"
+
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Calling Status", "All Leads", "Charts", "Daily Report", "Upload New Leads", reassign_label
     ])
 
     # ==================================================================
@@ -1161,6 +1361,79 @@ def admin_view():
                                 st.success(f"Done! **{len(records)}** new leads imported.")
                                 time.sleep(2)
                                 st.rerun()
+
+    # ==================================================================
+    # TAB 6: REASSIGN REQUESTS
+    # ==================================================================
+    with tab6:
+        st.markdown("### Pending Requests")
+
+        if not pending_reassign:
+            st.info("No pending reassign requests.")
+        else:
+            for req in pending_reassign:
+                with st.expander(
+                    f"📌 {req['lead_name']} ({req['lead_company']}) — "
+                    f"{req['from_sp_name']} → {req['to_sp_name']}"
+                ):
+                    rc1, rc2 = st.columns(2)
+                    with rc1:
+                        st.markdown(f"**Lead:** {req['lead_name']}")
+                        st.markdown(f"**Company:** {req['lead_company']}")
+                        st.markdown(f"**Current Status:** {req['current_followup_status']}")
+                    with rc2:
+                        st.markdown(f"**From:** {req['from_sp_name']}")
+                        st.markdown(f"**To:** {req['to_sp_name']}")
+                        st.markdown(f"**Submitted:** {str(req['created_at'])[:16]}")
+                    st.markdown(f"**Reason:** {req['reason']}")
+
+                    rj_reason = st.text_input(
+                        "Reject reason (optional)", "", key=f"rj_reason_{req['id']}"
+                    )
+
+                    bc1, bc2 = st.columns(2)
+                    with bc1:
+                        if st.button("✅ Approve", key=f"approve_{req['id']}", type="primary"):
+                            ok, msg = process_reassign_request(req["id"], "Approved")
+                            if ok:
+                                st.success(msg)
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    with bc2:
+                        if st.button("❌ Reject", key=f"reject_{req['id']}"):
+                            ok, msg = process_reassign_request(
+                                req["id"], "Rejected", reject_reason=rj_reason
+                            )
+                            if ok:
+                                st.success(msg)
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+
+        st.divider()
+        st.markdown("### History")
+        all_requests = load_reassign_requests()
+        history = [r for r in all_requests if r["status"] != "Pending"]
+        if history:
+            hist_df = pd.DataFrame(history)
+            hist_display = hist_df[[
+                "lead_name", "lead_company", "from_sp_name", "to_sp_name",
+                "reason", "status", "reject_reason", "current_followup_status",
+                "created_at", "reviewed_at",
+            ]].copy()
+            hist_display.columns = [
+                "Lead", "Company", "From", "To", "Reason", "Status",
+                "Reject Reason", "Follow-up Status", "Submitted", "Reviewed",
+            ]
+            hist_display["Submitted"] = hist_display["Submitted"].astype(str).str[:16]
+            hist_display["Reviewed"] = hist_display["Reviewed"].astype(str).str[:16]
+            hist_display["Reject Reason"] = hist_display["Reject Reason"].fillna("")
+            st.dataframe(hist_display, use_container_width=True, hide_index=True, height=400)
+        else:
+            st.info("No history yet.")
 
 
 # ==============================================================================
