@@ -657,10 +657,12 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
             if ra_results.empty:
                 st.info("No matching leads found.")
             else:
-                lead_options = {
-                    f"{int(r['ID'])} - {r['Full Name']} ({r['Company Name']}) - {r['Contact Number']}": r
-                    for _, r in ra_results.iterrows()
-                }
+                lead_options = {}
+                for _, r in ra_results.iterrows():
+                    event = str(r.get("Event Date Label", "")).strip()
+                    event_part = f" | {event}" if event else ""
+                    label = f"{int(r['ID'])} - {r['Full Name']} ({r['Company Name']}) - {r['Contact Number']}{event_part}"
+                    lead_options[label] = r
                 selected_lead = st.selectbox(
                     "Select lead", list(lead_options.keys()), key=f"ra_lead_{user_email}"
                 )
