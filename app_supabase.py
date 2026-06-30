@@ -626,231 +626,240 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
         st.warning("No leads found for your account.")
         return
 
-    # --- Filters Row 1 ---
-    fcol0a, fcol0b, fcol0c, fcol0d = st.columns(4)
-    with fcol0a:
-        attend_filter = st.selectbox(
-            "Attendance", ["Attended (1)", "Not Attended (0)", "All"], key="sp_attend"
-        )
-    with fcol0b:
-        status_filter = st.multiselect(
-            "Filter by Status", FOLLOWUP_STATUSES, default=[], placeholder="All statuses", key="sp_status"
-        )
-    with fcol0c:
-        # Month filter (words, e.g., "June 2026")
-        sp_month_dates = df_sp[["Event Month", "Preview Date Display"]].dropna().drop_duplicates("Event Month")
-        sp_month_dates = sp_month_dates[sp_month_dates["Event Month"] != ""]
-        sp_months_sorted = sp_month_dates.sort_values("Preview Date Display")["Event Month"].tolist()
-        month_filter = st.multiselect(
-            "Month", sp_months_sorted, default=[], placeholder="All months", key="sp_month"
-        )
-    with fcol0d:
-        # Cascading: filter by month first to populate event date options
-        df_sp_month = df_sp.copy()
-        if month_filter:
-            df_sp_month = df_sp_month[df_sp_month["Event Month"].isin(month_filter)]
-        sp_date_labels = df_sp_month[["Event Date Label", "Preview Date Display"]].dropna().drop_duplicates("Event Date Label")
-        sp_date_labels = sp_date_labels[sp_date_labels["Event Date Label"] != ""]
-        sp_dates_sorted = sp_date_labels.sort_values("Preview Date Display")["Event Date Label"].tolist()
-        event_filter = st.multiselect(
-            "Event Date", sp_dates_sorted, default=[], placeholder="All dates", key="sp_event"
-        )
-
-    # --- Filters Row 2 ---
-    available_cols = [c for c in DISPLAY_COLUMNS if c in df_sp.columns]
-    default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
-    fcol4, fcol5, fcol6 = st.columns(3)
-    with fcol4:
-        concern_values = sorted(df_sp["Concern"].dropna().astype(str).str.strip().unique())
-        concern_values = [c for c in concern_values if c and c.lower() not in ("nan", "none", "")]
-        concern_filter = st.multiselect(
-            "Concern", concern_values, default=[], placeholder="All concerns", key="sp_concern"
-        )
-    with fcol5:
-        search = st.text_input("Search (name, company, phone, or log)", "", key="sp_search")
-    with fcol6:
-        selected_cols = st.multiselect(
-            "Columns to show", available_cols, default=default_cols, key="sp_cols"
-        )
-
-    # --- Apply Filters ---
-    df_display = df_sp.copy()
-    if attend_filter == "Attended (1)":
-        df_display = df_display[df_display["Attendance"] == 1]
-    elif attend_filter == "Not Attended (0)":
-        df_display = df_display[df_display["Attendance"] == 0]
-
-    # --- Status Summary Cards (reflects attendance filter) ---
-    status_counts = df_display["Follow-up Status"].value_counts()
-    total = len(df_display)
-    card_statuses = ["Yet to call", "Unreached", "Follow Up", "Call Back", "Demo set", "Potential", "Sales"]
-    cols = st.columns(len(card_statuses))
-    for i, status in enumerate(card_statuses):
-        cols[i].metric(status, status_counts.get(status, 0))
-    st.caption(f"Total: **{total}** leads")
-    st.divider()
-    if month_filter:
-        df_display = df_display[df_display["Event Month"].isin(month_filter)]
-    if status_filter:
-        df_display = df_display[df_display["Follow-up Status"].isin(status_filter)]
-    if event_filter:
-        df_display = df_display[df_display["Event Date Label"].isin(event_filter)]
-    if concern_filter:
-        df_display = df_display[df_display["Concern"].astype(str).str.strip().isin(concern_filter)]
-    if search:
-        s = search.strip()
-        mask = (
-            df_display["Full Name"].astype(str).str.contains(s, case=False, na=False)
-            | df_display["Company Name"].astype(str).str.contains(s, case=False, na=False)
-            | df_display["Contact Number"].astype(str).str.contains(s, case=False, na=False)
-            | df_display["Conversation Log"].astype(str).str.contains(s, case=False, na=False)
-        )
-        df_display = df_display[mask]
-
-    show_cols = selected_cols if selected_cols else default_cols
-    df_edit = df_display[["pk"] + show_cols].copy()
-
-    # --- Export button ---
-    from datetime import date
-    sp_export = df_display[[c for c in DISPLAY_COLUMNS if c in df_display.columns]].copy()
-    sp_buffer = io.BytesIO()
-    sp_export.to_excel(sp_buffer, index=False, sheet_name="My Leads")
-    sp_buffer.seek(0)
-    st.download_button(
-        label=f"Export My Leads ({len(sp_export)} rows)",
-        data=sp_buffer,
-        file_name=f"My_Leads_{user_name}_{date.today().strftime('%Y-%m-%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="sp_export_btn",
-    )
-
-    st.markdown(f"**Showing {len(df_edit)} leads** — edit Follow-up Status & Remarks, then click Save.")
-
-    # --- Editable Table ---
-    edited_df = st.data_editor(
-        df_edit,
-        column_config={
-            "pk": None,  # Hidden
-            "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
-            "Full Name": st.column_config.TextColumn("Full Name", disabled=True, width="medium"),
-            "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
-            "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
-            "Email Address": st.column_config.TextColumn("Email", disabled=True, width="medium"),
-            "Designation": st.column_config.TextColumn("Designation", disabled=True, width="small"),
-            "Follow-up Status": st.column_config.SelectboxColumn(
-                "Follow-up Status", options=FOLLOWUP_STATUSES, required=True, width="medium",
-            ),
-            "Remarks": st.column_config.TextColumn("Remarks", width="large"),
-            "Conversation Log": st.column_config.TextColumn("Log", disabled=True, width="medium"),
-            "Preview Date": st.column_config.TextColumn("Event Date", disabled=True, width="small"),
-            "Topic": st.column_config.TextColumn("Topic", disabled=True, width="small"),
-            "Attendance": st.column_config.TextColumn("Attend", disabled=True, width="small"),
-            "Concern": st.column_config.TextColumn("Concern", disabled=True, width="medium"),
-            "Area": st.column_config.TextColumn("Area", disabled=True, width="small"),
-            "Industry": st.column_config.TextColumn("Industry", disabled=True, width="small"),
-            "Revenue (M)": st.column_config.NumberColumn("Revenue (M)", disabled=True, width="small"),
-            "Duplicate Check": st.column_config.TextColumn("Dup Chk", disabled=True, width="small"),
-            "Registered": st.column_config.NumberColumn("Registered", disabled=True, width="small"),
-            "Attended": st.column_config.NumberColumn("Attended", disabled=True, width="small"),
-        },
-        use_container_width=True,
-        num_rows="fixed",
-        hide_index=True,
-        key="sp_editor",
-    )
-
-    # --- Save Button ---
-    if st.button("Save Changes", type="primary", use_container_width=True):
-        changes = {}
-        for i in range(len(df_edit)):
-            orig_row = df_edit.iloc[i]
-            edit_row = edited_df.iloc[i]
-            orig_status = str(orig_row.get("Follow-up Status", ""))
-            edit_status = str(edit_row.get("Follow-up Status", ""))
-            orig_remarks = str(orig_row.get("Remarks", ""))
-            edit_remarks = str(edit_row.get("Remarks", ""))
-
-            if orig_status != edit_status or orig_remarks != edit_remarks:
-                pk = int(orig_row["pk"])
-                updates = {}
-                if orig_status != edit_status:
-                    updates["followup_status"] = edit_status
-                if orig_remarks != edit_remarks:
-                    updates["remarks"] = edit_remarks if edit_remarks != "nan" else None
-                changes[pk] = updates
-
-        if changes:
-            with st.spinner(f"Saving {len(changes)} change(s)..."):
-                try:
-                    save_changes(changes)
-                    st.success(f"{len(changes)} change(s) saved!")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error saving: {e}")
-        else:
-            st.info("No changes detected.")
-
-    # --- Request Lead Reassignment ---
-    st.divider()
-    st.markdown("### Request Lead Reassignment")
-
-    # Show pending count
+    # Show pending reassign count in tab label
     my_pending = load_reassign_requests(from_email=user_email, status_filter="Pending")
-    if my_pending:
-        st.caption(f"You have **{len(my_pending)}** pending request(s) awaiting admin approval.")
+    pending_label = f"Request Reassign ({len(my_pending)})" if my_pending else "Request Reassign"
+    sp_tab_leads, sp_tab_reassign = st.tabs(["My Leads", pending_label])
 
-    ra_search = st.text_input("Search your lead (name, company, or ID)", "", key=f"ra_search_{user_email}")
+    with sp_tab_reassign:
+        st.markdown("### Request Lead Reassignment")
 
-    if ra_search:
-        s = ra_search.strip()
-        ra_mask = (
-            df_sp["Full Name"].astype(str).str.contains(s, case=False, na=False)
-            | df_sp["Company Name"].astype(str).str.contains(s, case=False, na=False)
-            | df_sp["ID"].astype(str).str.contains(s, case=False, na=False)
+        if my_pending:
+            st.caption(f"You have **{len(my_pending)}** pending request(s) awaiting admin approval.")
+
+        ra_search = st.text_input(
+            "Search your lead (name, company, phone, or ID)", "", key=f"ra_search_{user_email}"
         )
-        ra_results = df_sp[ra_mask].head(20)
 
-        if ra_results.empty:
-            st.info("No matching leads found.")
-        else:
-            lead_options = {
-                f"{int(r['ID'])} - {r['Full Name']} ({r['Company Name']})": r
-                for _, r in ra_results.iterrows()
-            }
-            selected_lead = st.selectbox(
-                "Select lead", list(lead_options.keys()), key=f"ra_lead_{user_email}"
+        if ra_search:
+            s = ra_search.strip()
+            # Fuzzy match: split search into words, all must match across any field
+            words = s.lower().split()
+            ra_combined = (
+                df_sp["Full Name"].astype(str) + " " +
+                df_sp["Company Name"].astype(str) + " " +
+                df_sp["Contact Number"].astype(str) + " " +
+                df_sp["ID"].astype(str)
+            ).str.lower()
+            ra_mask = ra_combined.apply(lambda x: all(w in x for w in words))
+            ra_results = df_sp[ra_mask].head(20)
+
+            if ra_results.empty:
+                st.info("No matching leads found.")
+            else:
+                lead_options = {
+                    f"{int(r['ID'])} - {r['Full Name']} ({r['Company Name']}) - {r['Contact Number']}": r
+                    for _, r in ra_results.iterrows()
+                }
+                selected_lead = st.selectbox(
+                    "Select lead", list(lead_options.keys()), key=f"ra_lead_{user_email}"
+                )
+
+                sp_names = sorted([n for n in SALESPERSONS.values() if n != user_name])
+                target_sp = st.selectbox("Reassign to", sp_names, key=f"ra_target_{user_email}")
+
+                ra_reason = st.text_input("Reason (required)", "", key=f"ra_reason_{user_email}")
+
+                if st.button("Submit Request", key=f"ra_submit_{user_email}", type="primary"):
+                    if not ra_reason.strip():
+                        st.error("Please provide a reason.")
+                    else:
+                        lead_row = lead_options[selected_lead]
+                        to_email_addr = [e for e, n in SALESPERSONS.items() if n == target_sp][0]
+                        success, msg = submit_reassign_request(
+                            lead_pk=int(lead_row["pk"]),
+                            lead_name=str(lead_row["Full Name"]),
+                            lead_company=str(lead_row["Company Name"]),
+                            from_email=user_email,
+                            from_name=user_name,
+                            to_email=to_email_addr,
+                            to_name=target_sp,
+                            reason=ra_reason.strip(),
+                            current_status=str(lead_row.get("Follow-up Status", "")),
+                        )
+                        if success:
+                            st.success(msg)
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.warning(msg)
+
+    with sp_tab_leads:
+        # --- Filters Row 1 ---
+        fcol0a, fcol0b, fcol0c, fcol0d = st.columns(4)
+        with fcol0a:
+            attend_filter = st.selectbox(
+                "Attendance", ["Attended (1)", "Not Attended (0)", "All"], key="sp_attend"
+            )
+        with fcol0b:
+            status_filter = st.multiselect(
+                "Filter by Status", FOLLOWUP_STATUSES, default=[], placeholder="All statuses", key="sp_status"
+            )
+        with fcol0c:
+            # Month filter (words, e.g., "June 2026")
+            sp_month_dates = df_sp[["Event Month", "Preview Date Display"]].dropna().drop_duplicates("Event Month")
+            sp_month_dates = sp_month_dates[sp_month_dates["Event Month"] != ""]
+            sp_months_sorted = sp_month_dates.sort_values("Preview Date Display")["Event Month"].tolist()
+            month_filter = st.multiselect(
+                "Month", sp_months_sorted, default=[], placeholder="All months", key="sp_month"
+            )
+        with fcol0d:
+            # Cascading: filter by month first to populate event date options
+            df_sp_month = df_sp.copy()
+            if month_filter:
+                df_sp_month = df_sp_month[df_sp_month["Event Month"].isin(month_filter)]
+            sp_date_labels = df_sp_month[["Event Date Label", "Preview Date Display"]].dropna().drop_duplicates("Event Date Label")
+            sp_date_labels = sp_date_labels[sp_date_labels["Event Date Label"] != ""]
+            sp_dates_sorted = sp_date_labels.sort_values("Preview Date Display")["Event Date Label"].tolist()
+            event_filter = st.multiselect(
+                "Event Date", sp_dates_sorted, default=[], placeholder="All dates", key="sp_event"
             )
 
-            # Target salesperson (exclude self)
-            sp_names = sorted([n for n in SALESPERSONS.values() if n != user_name])
-            target_sp = st.selectbox("Reassign to", sp_names, key=f"ra_target_{user_email}")
+        # --- Filters Row 2 ---
+        available_cols = [c for c in DISPLAY_COLUMNS if c in df_sp.columns]
+        default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
+        fcol4, fcol5, fcol6 = st.columns(3)
+        with fcol4:
+            concern_values = sorted(df_sp["Concern"].dropna().astype(str).str.strip().unique())
+            concern_values = [c for c in concern_values if c and c.lower() not in ("nan", "none", "")]
+            concern_filter = st.multiselect(
+                "Concern", concern_values, default=[], placeholder="All concerns", key="sp_concern"
+            )
+        with fcol5:
+            search = st.text_input("Search (name, company, phone, or log)", "", key="sp_search")
+        with fcol6:
+            selected_cols = st.multiselect(
+                "Columns to show", available_cols, default=default_cols, key="sp_cols"
+            )
 
-            ra_reason = st.text_input("Reason (required)", "", key=f"ra_reason_{user_email}")
+        # --- Apply Filters ---
+        df_display = df_sp.copy()
+        if attend_filter == "Attended (1)":
+            df_display = df_display[df_display["Attendance"] == 1]
+        elif attend_filter == "Not Attended (0)":
+            df_display = df_display[df_display["Attendance"] == 0]
 
-            if st.button("Submit Request", key=f"ra_submit_{user_email}", type="primary"):
-                if not ra_reason.strip():
-                    st.error("Please provide a reason.")
-                else:
-                    lead_row = lead_options[selected_lead]
-                    to_email_addr = [e for e, n in SALESPERSONS.items() if n == target_sp][0]
-                    success, msg = submit_reassign_request(
-                        lead_pk=int(lead_row["pk"]),
-                        lead_name=str(lead_row["Full Name"]),
-                        lead_company=str(lead_row["Company Name"]),
-                        from_email=user_email,
-                        from_name=user_name,
-                        to_email=to_email_addr,
-                        to_name=target_sp,
-                        reason=ra_reason.strip(),
-                        current_status=str(lead_row.get("Follow-up Status", "")),
-                    )
-                    if success:
-                        st.success(msg)
+        # --- Status Summary Cards (reflects attendance filter) ---
+        status_counts = df_display["Follow-up Status"].value_counts()
+        total = len(df_display)
+        card_statuses = ["Yet to call", "Unreached", "Follow Up", "Call Back", "Demo set", "Potential", "Sales"]
+        cols = st.columns(len(card_statuses))
+        for i, status in enumerate(card_statuses):
+            cols[i].metric(status, status_counts.get(status, 0))
+        st.caption(f"Total: **{total}** leads")
+        st.divider()
+        if month_filter:
+            df_display = df_display[df_display["Event Month"].isin(month_filter)]
+        if status_filter:
+            df_display = df_display[df_display["Follow-up Status"].isin(status_filter)]
+        if event_filter:
+            df_display = df_display[df_display["Event Date Label"].isin(event_filter)]
+        if concern_filter:
+            df_display = df_display[df_display["Concern"].astype(str).str.strip().isin(concern_filter)]
+        if search:
+            s = search.strip()
+            mask = (
+                df_display["Full Name"].astype(str).str.contains(s, case=False, na=False)
+                | df_display["Company Name"].astype(str).str.contains(s, case=False, na=False)
+                | df_display["Contact Number"].astype(str).str.contains(s, case=False, na=False)
+                | df_display["Conversation Log"].astype(str).str.contains(s, case=False, na=False)
+            )
+            df_display = df_display[mask]
+
+        show_cols = selected_cols if selected_cols else default_cols
+        df_edit = df_display[["pk"] + show_cols].copy()
+
+        # --- Export button ---
+        from datetime import date
+        sp_export = df_display[[c for c in DISPLAY_COLUMNS if c in df_display.columns]].copy()
+        sp_buffer = io.BytesIO()
+        sp_export.to_excel(sp_buffer, index=False, sheet_name="My Leads")
+        sp_buffer.seek(0)
+        st.download_button(
+            label=f"Export My Leads ({len(sp_export)} rows)",
+            data=sp_buffer,
+            file_name=f"My_Leads_{user_name}_{date.today().strftime('%Y-%m-%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="sp_export_btn",
+        )
+
+        st.markdown(f"**Showing {len(df_edit)} leads** — edit Follow-up Status & Remarks, then click Save.")
+
+        # --- Editable Table ---
+        edited_df = st.data_editor(
+            df_edit,
+            column_config={
+                "pk": None,  # Hidden
+                "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                "Full Name": st.column_config.TextColumn("Full Name", disabled=True, width="medium"),
+                "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
+                "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
+                "Email Address": st.column_config.TextColumn("Email", disabled=True, width="medium"),
+                "Designation": st.column_config.TextColumn("Designation", disabled=True, width="small"),
+                "Follow-up Status": st.column_config.SelectboxColumn(
+                    "Follow-up Status", options=FOLLOWUP_STATUSES, required=True, width="medium",
+                ),
+                "Remarks": st.column_config.TextColumn("Remarks", width="small"),
+                "Conversation Log": st.column_config.TextColumn("Log", disabled=True, width="medium"),
+                "Preview Date": st.column_config.TextColumn("Event Date", disabled=True, width="small"),
+                "Topic": st.column_config.TextColumn("Topic", disabled=True, width="small"),
+                "Attendance": st.column_config.TextColumn("Attend", disabled=True, width="small"),
+                "Concern": st.column_config.TextColumn("Concern", disabled=True, width="medium"),
+                "Area": st.column_config.TextColumn("Area", disabled=True, width="small"),
+                "Industry": st.column_config.TextColumn("Industry", disabled=True, width="small"),
+                "Revenue (M)": st.column_config.NumberColumn("Revenue (M)", disabled=True, width="small"),
+                "Duplicate Check": st.column_config.TextColumn("Dup Chk", disabled=True, width="small"),
+                "Registered": st.column_config.NumberColumn("Registered", disabled=True, width="small"),
+                "Attended": st.column_config.NumberColumn("Attended", disabled=True, width="small"),
+            },
+            use_container_width=True,
+            num_rows="fixed",
+            hide_index=True,
+            key="sp_editor",
+        )
+
+        # --- Save Button ---
+        if st.button("Save Changes", type="primary", use_container_width=True):
+            changes = {}
+            for i in range(len(df_edit)):
+                orig_row = df_edit.iloc[i]
+                edit_row = edited_df.iloc[i]
+                orig_status = str(orig_row.get("Follow-up Status", ""))
+                edit_status = str(edit_row.get("Follow-up Status", ""))
+                orig_remarks = str(orig_row.get("Remarks", ""))
+                edit_remarks = str(edit_row.get("Remarks", ""))
+
+                if orig_status != edit_status or orig_remarks != edit_remarks:
+                    pk = int(orig_row["pk"])
+                    updates = {}
+                    if orig_status != edit_status:
+                        updates["followup_status"] = edit_status
+                    if orig_remarks != edit_remarks:
+                        updates["remarks"] = edit_remarks if edit_remarks != "nan" else None
+                    changes[pk] = updates
+
+            if changes:
+                with st.spinner(f"Saving {len(changes)} change(s)..."):
+                    try:
+                        save_changes(changes)
+                        st.success(f"{len(changes)} change(s) saved!")
                         time.sleep(1)
                         st.rerun()
-                    else:
-                        st.warning(msg)
+                    except Exception as e:
+                        st.error(f"Error saving: {e}")
+            else:
+                st.info("No changes detected.")
+
 
 
 # ==============================================================================
