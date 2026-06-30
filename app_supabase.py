@@ -632,69 +632,168 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
     sp_tab_leads, sp_tab_reassign = st.tabs(["My Leads", pending_label])
 
     with sp_tab_reassign:
-        st.markdown("### Request Lead Reassignment")
+        st.markdown("### Bulk Reassign Leads")
 
         if my_pending:
             st.caption(f"You have **{len(my_pending)}** pending request(s) awaiting admin approval.")
 
-        ra_search = st.text_input(
-            "Search your lead (name, company, phone, or ID)", "", key=f"ra_search_{user_email}"
-        )
+        # --- Filter row ---
+        bf1, bf2 = st.columns(2)
+        with bf1:
+            bulk_status = st.multiselect(
+                "Filter by Status", FOLLOWUP_STATUSES, default=[],
+                placeholder="Select status to filter", key=f"bulk_status_{user_email}"
+            )
+        with bf2:
+            sp_month_dates_ra = df_sp[["Event Month", "Preview Date Display"]].dropna().drop_duplicates("Event Month")
+            sp_month_dates_ra = sp_month_dates_ra[sp_month_dates_ra["Event Month"] != ""]
+            sp_months_ra = sp_month_dates_ra.sort_values("Preview Date Display")["Event Month"].tolist()
+            bulk_month = st.multiselect(
+                "Filter by Month", sp_months_ra, default=[],
+                placeholder="All months", key=f"bulk_month_{user_email}"
+            )
 
-        if ra_search:
-            s = ra_search.strip()
-            # Fuzzy match: split search into words, all must match across any field
-            words = s.lower().split()
-            ra_combined = (
-                df_sp["Full Name"].astype(str) + " " +
-                df_sp["Company Name"].astype(str) + " " +
-                df_sp["Contact Number"].astype(str) + " " +
-                df_sp["ID"].astype(str)
-            ).str.lower()
-            ra_mask = ra_combined.apply(lambda x: all(w in x for w in words))
-            ra_results = df_sp[ra_mask].head(20)
+        # Apply filters
+        df_bulk = df_sp.copy()
+        if bulk_status:
+            df_bulk = df_bulk[df_bulk["Follow-up Status"].isin(bulk_status)]
+        if bulk_month:
+            df_bulk = df_bulk[df_bulk["Event Month"].isin(bulk_month)]
 
-            if ra_results.empty:
-                st.info("No matching leads found.")
-            else:
-                lead_options = {}
-                for _, r in ra_results.iterrows():
-                    event = str(r.get("Event Date Label", "")).strip()
-                    event_part = f" | {event}" if event else ""
-                    label = f"{int(r['ID'])} - {r['Full Name']} ({r['Company Name']}) - {r['Contact Number']}{event_part}"
-                    lead_options[label] = r
-                selected_lead = st.selectbox(
-                    "Select lead", list(lead_options.keys()), key=f"ra_lead_{user_email}"
-                )
+        if bulk_status or bulk_month:
+            # Get existing pending lead_pks to exclude
+            pending_pks = set()
+            if my_pending:
+                pending_pks = {r["lead_pk"] for r in my_pending}
+
+            # Build checkbox table
+            bulk_table = df_bulk[["pk", "ID", "Full Name", "Company Name", "Contact Number",
+                                  "Event Date Label", "Follow-up Status"]].copy()
+            bulk_table.insert(0, "Select", False)
+            # Mark already-pending leads
+            if pending_pks:
+                bulk_table.loc[bulk_table["pk"].isin(pending_pks), "Select"] = None
+
+            st.caption(f"**{len(bulk_table)}** leads match your filters. Tick the ones to reassign.")
+
+            edited_bulk = st.data_editor(
+                bulk_table,
+                column_config={
+                    "pk": None,
+                    "Select": st.column_config.CheckboxColumn("✓", width="small"),
+                    "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                    "Full Name": st.column_config.TextColumn("Name", disabled=True, width="medium"),
+                    "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
+                    "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
+                    "Event Date Label": st.column_config.TextColumn("Event", disabled=True, width="medium"),
+                    "Follow-up Status": st.column_config.TextColumn("Status", disabled=True, width="small"),
+                },
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                key=f"bulk_editor_{user_email}",
+            )
+
+            selected_rows = edited_bulk[edited_bulk["Select"] == True]
+            selected_count = len(selected_rows)
+
+            if selected_count > 0:
+                st.caption(f"**{selected_count}** lead(s) selected")
 
                 sp_names = sorted([n for n in SALESPERSONS.values() if n != user_name])
-                target_sp = st.selectbox("Reassign to", sp_names, key=f"ra_target_{user_email}")
+                bulk_target = st.selectbox("Reassign to", sp_names, key=f"bulk_target_{user_email}")
+                bulk_reason = st.text_input("Reason (required)", "", key=f"bulk_reason_{user_email}")
 
-                ra_reason = st.text_input("Reason (required)", "", key=f"ra_reason_{user_email}")
-
-                if st.button("Submit Request", key=f"ra_submit_{user_email}", type="primary"):
-                    if not ra_reason.strip():
+                if st.button(f"Submit {selected_count} Request(s)", key=f"bulk_submit_{user_email}", type="primary"):
+                    if not bulk_reason.strip():
                         st.error("Please provide a reason.")
                     else:
-                        lead_row = lead_options[selected_lead]
-                        to_email_addr = [e for e, n in SALESPERSONS.items() if n == target_sp][0]
-                        success, msg = submit_reassign_request(
-                            lead_pk=int(lead_row["pk"]),
-                            lead_name=str(lead_row["Full Name"]),
-                            lead_company=str(lead_row["Company Name"]),
-                            from_email=user_email,
-                            from_name=user_name,
-                            to_email=to_email_addr,
-                            to_name=target_sp,
-                            reason=ra_reason.strip(),
-                            current_status=str(lead_row.get("Follow-up Status", "")),
-                        )
-                        if success:
-                            st.success(msg)
-                            time.sleep(1)
-                            st.rerun()
+                        to_email_addr = [e for e, n in SALESPERSONS.items() if n == bulk_target][0]
+                        success_count = 0
+                        skip_count = 0
+                        for _, row in selected_rows.iterrows():
+                            ok, msg = submit_reassign_request(
+                                lead_pk=int(row["pk"]),
+                                lead_name=str(row["Full Name"]),
+                                lead_company=str(row["Company Name"]),
+                                from_email=user_email,
+                                from_name=user_name,
+                                to_email=to_email_addr,
+                                to_name=bulk_target,
+                                reason=bulk_reason.strip(),
+                                current_status=str(row.get("Follow-up Status", "")),
+                            )
+                            if ok:
+                                success_count += 1
+                            else:
+                                skip_count += 1
+                        msg_parts = [f"{success_count} request(s) submitted!"]
+                        if skip_count:
+                            msg_parts.append(f"{skip_count} skipped (already pending).")
+                        st.success(" ".join(msg_parts))
+                        time.sleep(1)
+                        st.rerun()
+        else:
+            st.info("Select a status filter above to see leads for reassignment.")
+
+        # --- Single search fallback ---
+        with st.expander("Search for a specific lead"):
+            ra_search = st.text_input(
+                "Search (name, company, phone, or ID)", "", key=f"ra_search_{user_email}"
+            )
+
+            if ra_search:
+                s = ra_search.strip()
+                words = s.lower().split()
+                ra_combined = (
+                    df_sp["Full Name"].astype(str) + " " +
+                    df_sp["Company Name"].astype(str) + " " +
+                    df_sp["Contact Number"].astype(str) + " " +
+                    df_sp["ID"].astype(str)
+                ).str.lower()
+                ra_mask = ra_combined.apply(lambda x: all(w in x for w in words))
+                ra_results = df_sp[ra_mask].head(20)
+
+                if ra_results.empty:
+                    st.info("No matching leads found.")
+                else:
+                    lead_options = {}
+                    for _, r in ra_results.iterrows():
+                        event = str(r.get("Event Date Label", "")).strip()
+                        event_part = f" | {event}" if event else ""
+                        label = f"{int(r['ID'])} - {r['Full Name']} ({r['Company Name']}) - {r['Contact Number']}{event_part}"
+                        lead_options[label] = r
+                    selected_lead = st.selectbox(
+                        "Select lead", list(lead_options.keys()), key=f"ra_lead_{user_email}"
+                    )
+
+                    sp_names_s = sorted([n for n in SALESPERSONS.values() if n != user_name])
+                    target_sp = st.selectbox("Reassign to", sp_names_s, key=f"ra_target_{user_email}")
+                    ra_reason = st.text_input("Reason (required)", "", key=f"ra_reason_{user_email}")
+
+                    if st.button("Submit Request", key=f"ra_submit_{user_email}", type="primary"):
+                        if not ra_reason.strip():
+                            st.error("Please provide a reason.")
                         else:
-                            st.warning(msg)
+                            lead_row = lead_options[selected_lead]
+                            to_email_addr = [e for e, n in SALESPERSONS.items() if n == target_sp][0]
+                            success, msg = submit_reassign_request(
+                                lead_pk=int(lead_row["pk"]),
+                                lead_name=str(lead_row["Full Name"]),
+                                lead_company=str(lead_row["Company Name"]),
+                                from_email=user_email,
+                                from_name=user_name,
+                                to_email=to_email_addr,
+                                to_name=target_sp,
+                                reason=ra_reason.strip(),
+                                current_status=str(lead_row.get("Follow-up Status", "")),
+                            )
+                            if success:
+                                st.success(msg)
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.warning(msg)
 
     with sp_tab_leads:
         # --- Filters Row 1 ---
