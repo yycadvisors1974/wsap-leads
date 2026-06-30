@@ -276,8 +276,9 @@ def get_assigned_leads(df: pd.DataFrame) -> pd.DataFrame:
 # ==============================================================================
 
 
+@st.cache_data(ttl=30)
 def load_reassign_requests(from_email=None, status_filter=None, to_email=None, unseen_only=False):
-    """Fetch reassign requests from Supabase (never cached)."""
+    """Fetch reassign requests from Supabase (cached 30s)."""
     supabase = get_supabase()
     query = supabase.table("reassign_requests").select("*").order("created_at", desc=True)
     if from_email:
@@ -315,6 +316,7 @@ def submit_reassign_request(lead_pk, lead_name, lead_company, from_email, from_n
         "status": "Pending",
         "current_followup_status": current_status,
     }).execute()
+    load_reassign_requests.clear()
     return True, "Request submitted! Admin will review it."
 
 
@@ -339,6 +341,7 @@ def process_reassign_request(request_id, action, reject_reason=None):
             "reject_reason": reject_reason or "",
             "reviewed_at": now.isoformat(),
         }).eq("id", request_id).execute()
+        load_reassign_requests.clear()
         return True, "Request rejected."
 
     # Approved — update the lead
@@ -385,6 +388,7 @@ def process_reassign_request(request_id, action, reject_reason=None):
         "reviewed_at": now.isoformat(),
     }).eq("id", request_id).execute()
 
+    load_reassign_requests.clear()
     return True, f"Approved! Lead reassigned to {to_name}."
 
 
@@ -393,6 +397,7 @@ def dismiss_reassign_notifications(request_ids):
     supabase = get_supabase()
     for rid in request_ids:
         supabase.table("reassign_requests").update({"seen_by_recipient": True}).eq("id", rid).execute()
+    load_reassign_requests.clear()
 
 
 # ==============================================================================
@@ -674,65 +679,66 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
             if pending_pks:
                 bulk_table.loc[bulk_table["pk"].isin(pending_pks), "Select"] = None
 
-            st.caption(f"**{len(bulk_table)}** leads match your filters. Tick the ones to reassign.")
+            st.caption(f"**{len(bulk_table)}** leads match your filters. Tick the ones to reassign, then click Submit.")
 
-            edited_bulk = st.data_editor(
-                bulk_table,
-                column_config={
-                    "pk": None,
-                    "Select": st.column_config.CheckboxColumn("✓", width="small"),
-                    "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
-                    "Full Name": st.column_config.TextColumn("Name", disabled=True, width="medium"),
-                    "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
-                    "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
-                    "Event Date Label": st.column_config.TextColumn("Event", disabled=True, width="medium"),
-                    "Follow-up Status": st.column_config.TextColumn("Status", disabled=True, width="small"),
-                },
-                use_container_width=True,
-                hide_index=True,
-                num_rows="fixed",
-                key=f"bulk_editor_{user_email}",
-            )
-
-            selected_rows = edited_bulk[edited_bulk["Select"] == True]
-            selected_count = len(selected_rows)
-
-            if selected_count > 0:
-                st.caption(f"**{selected_count}** lead(s) selected")
+            with st.form(key=f"bulk_form_{user_email}"):
+                edited_bulk = st.data_editor(
+                    bulk_table,
+                    column_config={
+                        "pk": None,
+                        "Select": st.column_config.CheckboxColumn("✓", width="small"),
+                        "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                        "Full Name": st.column_config.TextColumn("Name", disabled=True, width="medium"),
+                        "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
+                        "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
+                        "Event Date Label": st.column_config.TextColumn("Event", disabled=True, width="medium"),
+                        "Follow-up Status": st.column_config.TextColumn("Status", disabled=True, width="small"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="fixed",
+                    key=f"bulk_editor_{user_email}",
+                )
 
                 sp_names = sorted([n for n in SALESPERSONS.values() if n != user_name])
                 bulk_target = st.selectbox("Reassign to", sp_names, key=f"bulk_target_{user_email}")
                 bulk_reason = st.text_input("Reason (required)", "", key=f"bulk_reason_{user_email}")
 
-                if st.button(f"Submit {selected_count} Request(s)", key=f"bulk_submit_{user_email}", type="primary"):
-                    if not bulk_reason.strip():
-                        st.error("Please provide a reason.")
-                    else:
-                        to_email_addr = [e for e, n in SALESPERSONS.items() if n == bulk_target][0]
-                        success_count = 0
-                        skip_count = 0
-                        for _, row in selected_rows.iterrows():
-                            ok, msg = submit_reassign_request(
-                                lead_pk=int(row["pk"]),
-                                lead_name=str(row["Full Name"]),
-                                lead_company=str(row["Company Name"]),
-                                from_email=user_email,
-                                from_name=user_name,
-                                to_email=to_email_addr,
-                                to_name=bulk_target,
-                                reason=bulk_reason.strip(),
-                                current_status=str(row.get("Follow-up Status", "")),
-                            )
-                            if ok:
-                                success_count += 1
-                            else:
-                                skip_count += 1
-                        msg_parts = [f"{success_count} request(s) submitted!"]
-                        if skip_count:
-                            msg_parts.append(f"{skip_count} skipped (already pending).")
-                        st.success(" ".join(msg_parts))
-                        time.sleep(1)
-                        st.rerun()
+                submitted = st.form_submit_button("Submit Request(s)", type="primary")
+
+            if submitted:
+                selected_rows = edited_bulk[edited_bulk["Select"] == True]
+                selected_count = len(selected_rows)
+                if selected_count == 0:
+                    st.warning("No leads selected.")
+                elif not bulk_reason.strip():
+                    st.error("Please provide a reason.")
+                else:
+                    to_email_addr = [e for e, n in SALESPERSONS.items() if n == bulk_target][0]
+                    success_count = 0
+                    skip_count = 0
+                    for _, row in selected_rows.iterrows():
+                        ok, msg = submit_reassign_request(
+                            lead_pk=int(row["pk"]),
+                            lead_name=str(row["Full Name"]),
+                            lead_company=str(row["Company Name"]),
+                            from_email=user_email,
+                            from_name=user_name,
+                            to_email=to_email_addr,
+                            to_name=bulk_target,
+                            reason=bulk_reason.strip(),
+                            current_status=str(row.get("Follow-up Status", "")),
+                        )
+                        if ok:
+                            success_count += 1
+                        else:
+                            skip_count += 1
+                    msg_parts = [f"{success_count} request(s) submitted!"]
+                    if skip_count:
+                        msg_parts.append(f"{skip_count} skipped (already pending).")
+                    st.success(" ".join(msg_parts))
+                    time.sleep(1)
+                    st.rerun()
         else:
             st.info("Select a status filter above to see leads for reassignment.")
 
@@ -1263,33 +1269,28 @@ def admin_view():
                               "Sales Person Name", "Event Date Label", "Follow-up Status"]].copy()
             ab_table.insert(0, "Select", False)
 
-            st.caption(f"**{len(ab_table)}** leads match. Tick the ones to reassign.")
+            st.caption(f"**{len(ab_table)}** leads match. Tick the ones to reassign, then click Reassign.")
 
-            edited_ab = st.data_editor(
-                ab_table,
-                column_config={
-                    "pk": None,
-                    "Select": st.column_config.CheckboxColumn("✓", width="small"),
-                    "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
-                    "Full Name": st.column_config.TextColumn("Name", disabled=True, width="medium"),
-                    "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
-                    "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
-                    "Sales Person Name": st.column_config.TextColumn("Current SP", disabled=True, width="small"),
-                    "Event Date Label": st.column_config.TextColumn("Event", disabled=True, width="medium"),
-                    "Follow-up Status": st.column_config.TextColumn("Status", disabled=True, width="small"),
-                },
-                use_container_width=True,
-                hide_index=True,
-                num_rows="fixed",
-                height=400,
-                key="admin_bulk_editor",
-            )
-
-            ab_selected = edited_ab[edited_ab["Select"] == True]
-            ab_count = len(ab_selected)
-
-            if ab_count > 0:
-                st.caption(f"**{ab_count}** lead(s) selected")
+            with st.form(key="admin_bulk_form"):
+                edited_ab = st.data_editor(
+                    ab_table,
+                    column_config={
+                        "pk": None,
+                        "Select": st.column_config.CheckboxColumn("✓", width="small"),
+                        "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                        "Full Name": st.column_config.TextColumn("Name", disabled=True, width="medium"),
+                        "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
+                        "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
+                        "Sales Person Name": st.column_config.TextColumn("Current SP", disabled=True, width="small"),
+                        "Event Date Label": st.column_config.TextColumn("Event", disabled=True, width="medium"),
+                        "Follow-up Status": st.column_config.TextColumn("Status", disabled=True, width="small"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="fixed",
+                    height=400,
+                    key="admin_bulk_editor",
+                )
 
                 abc1, abc2 = st.columns(2)
                 with abc1:
@@ -1301,7 +1302,15 @@ def admin_view():
                         "Append reassign remark", value=True, key="admin_bulk_remark"
                     )
 
-                if st.button(f"Reassign {ab_count} Lead(s) Now", key="admin_bulk_go", type="primary"):
+                submitted_ab = st.form_submit_button("Reassign Selected Lead(s) Now", type="primary")
+
+            if submitted_ab:
+                ab_selected = edited_ab[edited_ab["Select"] == True]
+                ab_count = len(ab_selected)
+
+                if ab_count == 0:
+                    st.warning("No leads selected.")
+                else:
                     from datetime import datetime
                     now = datetime.now()
                     to_email = [e for e, n in SALESPERSONS.items() if n == admin_bulk_target][0]
@@ -1324,7 +1333,6 @@ def admin_view():
                         if admin_bulk_remark and from_name:
                             status_abbr = "UR" if fs == "Unreached" else fs
                             remark_suffix = f"reassign from {from_name.lower()}-{status_abbr} {now.day}/{now.month}"
-                            # Fetch current remarks
                             supabase = get_supabase()
                             lead_resp = supabase.table("leads").select("remarks").eq("pk", pk).execute()
                             existing = (lead_resp.data[0].get("remarks") or "") if lead_resp.data else ""
