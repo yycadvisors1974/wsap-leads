@@ -113,6 +113,7 @@ SP_DEFAULT_COLUMNS = [
     "Full Name", "Company Name", "Contact Number",
     "Designation", "Follow-up Status", "Remarks",
     "Revenue (M)", "Registered", "Attended",
+    "Area", "Concern",
 ]
 
 # Supabase column name → Display column name
