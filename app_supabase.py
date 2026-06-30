@@ -492,8 +492,8 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
         st.warning("No leads found for your account.")
         return
 
-    # --- Attendance filter first (determines what cards show) ---
-    fcol0a, fcol0b, fcol0c = st.columns(3)
+    # --- Filters Row 1 ---
+    fcol0a, fcol0b, fcol0c, fcol0d = st.columns(4)
     with fcol0a:
         attend_filter = st.selectbox(
             "Attendance", ["Attended (1)", "Not Attended (0)", "All"], key="sp_attend"
@@ -510,22 +510,27 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
         month_filter = st.multiselect(
             "Month", sp_months_sorted, default=[], placeholder="All months", key="sp_month"
         )
-
-    # Cascading: filter by month first to populate event date options
-    df_sp_month = df_sp.copy()
-    if month_filter:
-        df_sp_month = df_sp_month[df_sp_month["Event Month"].isin(month_filter)]
+    with fcol0d:
+        # Cascading: filter by month first to populate event date options
+        df_sp_month = df_sp.copy()
+        if month_filter:
+            df_sp_month = df_sp_month[df_sp_month["Event Month"].isin(month_filter)]
+        sp_date_labels = df_sp_month[["Event Date Label", "Preview Date Display"]].dropna().drop_duplicates("Event Date Label")
+        sp_date_labels = sp_date_labels[sp_date_labels["Event Date Label"] != ""]
+        sp_dates_sorted = sp_date_labels.sort_values("Preview Date Display")["Event Date Label"].tolist()
+        event_filter = st.multiselect(
+            "Event Date", sp_dates_sorted, default=[], placeholder="All dates", key="sp_event"
+        )
 
     # --- Filters Row 2 ---
     available_cols = [c for c in DISPLAY_COLUMNS if c in df_sp.columns]
     default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
     fcol4, fcol5, fcol6 = st.columns(3)
     with fcol4:
-        sp_date_labels = df_sp_month[["Event Date Label", "Preview Date Display"]].dropna().drop_duplicates("Event Date Label")
-        sp_date_labels = sp_date_labels[sp_date_labels["Event Date Label"] != ""]
-        sp_dates_sorted = sp_date_labels.sort_values("Preview Date Display")["Event Date Label"].tolist()
-        event_filter = st.multiselect(
-            "Event Date", sp_dates_sorted, default=[], placeholder="All dates", key="sp_event"
+        concern_values = sorted(df_sp["Concern"].dropna().astype(str).str.strip().unique())
+        concern_values = [c for c in concern_values if c and c.lower() not in ("nan", "none", "")]
+        concern_filter = st.multiselect(
+            "Concern", concern_values, default=[], placeholder="All concerns", key="sp_concern"
         )
     with fcol5:
         search = st.text_input("Search (name, company, phone, or log)", "", key="sp_search")
@@ -556,6 +561,8 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
         df_display = df_display[df_display["Follow-up Status"].isin(status_filter)]
     if event_filter:
         df_display = df_display[df_display["Event Date Label"].isin(event_filter)]
+    if concern_filter:
+        df_display = df_display[df_display["Concern"].astype(str).str.strip().isin(concern_filter)]
     if search:
         s = search.strip()
         mask = (
