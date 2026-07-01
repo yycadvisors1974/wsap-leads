@@ -44,6 +44,7 @@ SP_PASSWORDS = {
     "JENNY LEE": "jenny@8386",
     "JACOB": "jacob@1563",
     "CJ": "cj@0610",
+    "BRANDON": "brandon@9106",
 }
 
 SALESPERSONS = {
@@ -63,10 +64,11 @@ SALESPERSONS = {
     "jiajie.yeow@yycadvisors.com": "YEOW JIA JIE",
     "cheejian.chen@yycadvisors.com": "CJ",
     "chunjie.lim@yycadvisors.com": "JACOB",
+    "zheqin@yycadvisors.com": "BRANDON",
 }
 
 TEAMS = {
-    "PANG'S TEAM": ["PANG", "BOON WAI", "LUCAS"],
+    "PANG'S TEAM": ["PANG", "BOON WAI", "LUCAS", "BRANDON"],
     "DAVID'S TEAM": ["DAVID", "WAN ROU"],
     "MIA'S TEAM": ["MIA", "CARMEN"],
     "ELLA'S TEAM": ["ELLA SOON", "ESTHER SOO", "EDISON", "IAN"],
