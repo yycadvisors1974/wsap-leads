@@ -259,6 +259,83 @@ def load_data() -> pd.DataFrame:
                 + " (" + topic_part[has_date] + ")"
             )
 
+    df = _compute_dup_reg_att(df)
+    return df
+
+
+def _compute_dup_reg_att(df):
+    """Compute Duplicate Check, Registered, Attended via email/phone matching."""
+    n = len(df)
+    if n == 0:
+        return df
+
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+
+    emails = df["Email Address"].astype(str).str.strip().str.lower().values
+    email_map = {}
+    for i, e in enumerate(emails):
+        if e and e not in ("nan", "none", ""):
+            if e in email_map:
+                union(i, email_map[e])
+            else:
+                email_map[e] = i
+
+    phones = df["Contact Number"].astype(str).str.strip().values
+    phone_map = {}
+    for i, p in enumerate(phones):
+        if p and p not in ("nan", "none", ""):
+            if p in phone_map:
+                union(i, phone_map[p])
+            else:
+                phone_map[p] = i
+
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+
+    dup_vals = [""] * n
+    reg_vals = [1] * n
+    att_vals = [0] * n
+
+    sp_col = df["Sales Person Name"].astype(str).str.strip().values
+    att_col = df["Attendance"].astype(str).str.strip().values
+
+    for group in groups.values():
+        reg_count = len(group)
+        att_count = sum(1 for i in group if att_col[i] == "1")
+
+        sp_names = sorted(set(
+            sp_col[i] for i in group
+            if sp_col[i] and sp_col[i].lower() not in ("nan", "none", "")
+        ))
+
+        dup_label = ""
+        if reg_count > 1:
+            if len(sp_names) <= 1:
+                dup_label = f"Self-dup: {sp_names[0]}" if sp_names else ""
+            else:
+                dup_label = f"Dup: {' & '.join(sp_names)}"
+
+        for i in group:
+            reg_vals[i] = reg_count
+            att_vals[i] = att_count
+            dup_vals[i] = dup_label
+
+    df = df.copy()
+    df["Duplicate Check"] = dup_vals
+    df["Registered"] = reg_vals
+    df["Attended"] = att_vals
     return df
 
 
