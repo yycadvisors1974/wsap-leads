@@ -11,6 +11,7 @@ Manager sees their team overview + own leads.
 import io
 import time
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -295,6 +296,25 @@ def load_reassign_requests(from_email=None, status_filter=None, to_email=None, u
         query = query.eq("seen_by_recipient", False)
     resp = query.execute()
     return resp.data
+
+
+def load_column_prefs(user_email):
+    """Fetch saved column preferences for a user."""
+    supabase = get_supabase()
+    resp = supabase.table("user_preferences").select("column_prefs").eq("user_email", user_email).execute()
+    if resp.data and resp.data[0].get("column_prefs"):
+        return resp.data[0]["column_prefs"]
+    return None
+
+
+def save_column_prefs(user_email, cols):
+    """Upsert column preferences for a user."""
+    supabase = get_supabase()
+    supabase.table("user_preferences").upsert({
+        "user_email": user_email,
+        "column_prefs": cols,
+        "updated_at": "now()"
+    }).execute()
 
 
 def submit_reassign_request(lead_pk, lead_name, lead_company, from_email, from_name,
@@ -950,7 +970,13 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
 
         # --- Filters Row 2 ---
         available_cols = [c for c in DISPLAY_COLUMNS if c in df_sp.columns]
-        default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
+        saved_prefs = load_column_prefs(user_email)
+        if saved_prefs:
+            default_cols = [c for c in saved_prefs if c in available_cols]
+            if not default_cols:
+                default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
+        else:
+            default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
         fcol4, fcol4b, fcol5, fcol6 = st.columns(4)
         with fcol4:
             utm_group_values = sorted(df_sp["UTM Grouping"].dropna().astype(str).str.strip().unique())
@@ -970,6 +996,8 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
             selected_cols = st.multiselect(
                 "Columns to show", available_cols, default=default_cols, key="sp_cols"
             )
+            if selected_cols != default_cols:
+                save_column_prefs(user_email, selected_cols)
 
         # --- Apply Filters ---
         df_display = df_sp.copy()
@@ -1861,6 +1889,16 @@ def main():
     if "user_email" not in st.session_state:
         login_page()
         return
+
+    # Keep session alive — ping every 2 minutes to prevent idle timeout
+    components.html(
+        """<script>
+        setInterval(function() {
+            fetch(window.location.href, {method: 'HEAD', cache: 'no-store'});
+        }, 120000);
+        </script>""",
+        height=0,
+    )
 
     user_email = st.session_state["user_email"]
     user_name = st.session_state["user_name"]
