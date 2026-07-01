@@ -524,13 +524,7 @@ def _build_calling_status_pdf(summary_df, statuses, filter_desc, teams_show, df_
     pdf.cell(0, 6, f"Date generated: {datetime.now().strftime('%d/%m/%Y %I:%M %p')}", align="C", **NL)
     pdf.ln(4)
 
-    # --- Section 1: Calling Status by Team ---
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 8, "1. Calling Status by Team", **NL)
-    pdf.ln(2)
-
     columns = ["Sales Person"] + list(statuses) + ["Total"]
-    # Calculate column widths — first col wider, rest proportional
     page_w = pdf.w - pdf.l_margin - pdf.r_margin
     first_col_w = 32
     remaining_w = page_w - first_col_w
@@ -574,6 +568,29 @@ def _build_calling_status_pdf(summary_df, statuses, filter_desc, teams_show, df_
         pdf.ln(row_h)
         pdf.set_text_color(0, 0, 0)
 
+    # --- Section 1: Team Overview (team totals only) ---
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, "1. Team Overview", **NL)
+    pdf.ln(2)
+
+    _draw_header()
+    for team in teams_show:
+        team_total_row = summary_df[summary_df["Sales Person"] == f"{team} Total"]
+        if not team_total_row.empty:
+            row_data = team_total_row.iloc[0].to_dict()
+            row_data["Sales Person"] = team
+            _draw_row(row_data, is_total=True)
+
+    grand_rows = summary_df[summary_df["Sales Person"] == "GRAND TOTAL"]
+    if not grand_rows.empty:
+        _draw_row(grand_rows.iloc[0].to_dict(), is_grand=True)
+    pdf.ln(6)
+
+    # --- Section 2: Calling Status Breakdown (per team, per person) ---
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, "2. Calling Status Breakdown", **NL)
+    pdf.ln(2)
+
     for team in teams_show:
         if pdf.get_y() > pdf.h - 40:
             pdf.add_page()
@@ -592,51 +609,11 @@ def _build_calling_status_pdf(summary_df, statuses, filter_desc, teams_show, df_
 
         pdf.ln(3)
 
-    # Grand total
-    grand_rows = summary_df[summary_df["Sales Person"] == "GRAND TOTAL"]
     if not grand_rows.empty:
         if pdf.get_y() > pdf.h - 25:
             pdf.add_page()
         _draw_header()
         _draw_row(grand_rows.iloc[0].to_dict(), is_grand=True)
-    pdf.ln(6)
-
-    # --- Section 2: Calling Status Breakdown ---
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 8, "2. Calling Status Breakdown", **NL)
-    pdf.ln(2)
-
-    breakdown_rows = []
-    total_leads = len(df_cs)
-    for status in statuses:
-        count = int(len(df_cs[df_cs["Follow-up Status"] == status]))
-        pct = round(count / total_leads * 100, 1) if total_leads > 0 else 0
-        breakdown_rows.append({"Status": status, "Count": str(count), "%": f"{pct}%"})
-    breakdown_rows.append({"Status": "TOTAL", "Count": str(total_leads), "%": "100%"})
-
-    bd_cols = ["Status", "Count", "%"]
-    bd_widths = [80, 40, 40]
-
-    pdf.set_font("Helvetica", "B", 8)
-    pdf.set_fill_color(31, 78, 121)
-    pdf.set_text_color(255, 255, 255)
-    for i, col in enumerate(bd_cols):
-        pdf.cell(bd_widths[i], row_h, col, border=1, fill=True, align="C")
-    pdf.ln(row_h)
-    pdf.set_text_color(0, 0, 0)
-
-    for br in breakdown_rows:
-        is_total = br["Status"] == "TOTAL"
-        if is_total:
-            pdf.set_font("Helvetica", "B", 8)
-            pdf.set_fill_color(214, 228, 240)
-        else:
-            pdf.set_font("Helvetica", "", 8)
-            pdf.set_fill_color(255, 255, 255)
-        pdf.cell(bd_widths[0], row_h, br["Status"], border=1, fill=True, align="L")
-        pdf.cell(bd_widths[1], row_h, br["Count"], border=1, fill=True, align="C")
-        pdf.cell(bd_widths[2], row_h, br["%"], border=1, fill=True, align="C")
-        pdf.ln(row_h)
 
     return bytes(pdf.output())
 
