@@ -1266,7 +1266,8 @@ def admin_view():
                     df_ab = df_ab[df_ab["Sales Person Name"].isin(ab_members)]
 
             ab_table = df_ab[["pk", "ID", "Full Name", "Company Name", "Contact Number",
-                              "Sales Person Name", "Event Date Label", "Follow-up Status"]].copy()
+                              "Sales Person Name", "Event Date Label", "Follow-up Status",
+                              "Attendance"]].copy()
             ab_table.insert(0, "Select", False)
 
             st.caption(f"**{len(ab_table)}** leads match. Tick the ones to reassign, then click Reassign.")
@@ -1284,6 +1285,7 @@ def admin_view():
                         "Sales Person Name": st.column_config.TextColumn("Current SP", disabled=True, width="small"),
                         "Event Date Label": st.column_config.TextColumn("Event", disabled=True, width="medium"),
                         "Follow-up Status": st.column_config.TextColumn("Status", disabled=True, width="small"),
+                        "Attendance": st.column_config.NumberColumn("Attend", disabled=True, width="small"),
                     },
                     use_container_width=True,
                     hide_index=True,
