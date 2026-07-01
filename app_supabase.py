@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client
+from fpdf import FPDF
 
 # ==============================================================================
 # CONFIGURATION
@@ -503,6 +504,141 @@ def style_summary_table(df: pd.DataFrame):
             return ["background-color: #d6e4f0; font-weight: bold"] * len(row)
         return [""] * len(row)
     return df.style.apply(row_style, axis=1)
+
+
+def _build_calling_status_pdf(summary_df, statuses, filter_desc, teams_show, df_cs):
+    """Generate a landscape PDF of calling status summary with text wrapping."""
+    from datetime import datetime
+    from fpdf.enums import XPos, YPos
+
+    NL = {"new_x": XPos.LMARGIN, "new_y": YPos.NEXT}  # shortcut for newline
+
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Title
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, f"Calling Status for {filter_desc}", align="C", **NL)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(0, 6, f"Date generated: {datetime.now().strftime('%d/%m/%Y %I:%M %p')}", align="C", **NL)
+    pdf.ln(4)
+
+    # --- Section 1: Calling Status by Team ---
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, "1. Calling Status by Team", **NL)
+    pdf.ln(2)
+
+    columns = ["Sales Person"] + list(statuses) + ["Total"]
+    # Calculate column widths — first col wider, rest proportional
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+    first_col_w = 32
+    remaining_w = page_w - first_col_w
+    n_data_cols = len(columns) - 1
+    data_col_w = remaining_w / n_data_cols if n_data_cols > 0 else remaining_w
+    col_widths = [first_col_w] + [data_col_w] * n_data_cols
+
+    row_h = 7
+
+    def _draw_header():
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_fill_color(31, 78, 121)
+        pdf.set_text_color(255, 255, 255)
+        for i, col in enumerate(columns):
+            label = col[:12] if len(col) > 12 else col
+            align = "L" if i == 0 else "C"
+            pdf.cell(col_widths[i], row_h, label, border=1, fill=True, align=align)
+        pdf.ln(row_h)
+        pdf.set_text_color(0, 0, 0)
+
+    def _draw_row(row_data, is_total=False, is_grand=False):
+        if is_grand:
+            pdf.set_font("Helvetica", "B", 7)
+            pdf.set_fill_color(31, 78, 121)
+            pdf.set_text_color(255, 255, 255)
+        elif is_total:
+            pdf.set_font("Helvetica", "B", 7)
+            pdf.set_fill_color(214, 228, 240)
+            pdf.set_text_color(0, 0, 0)
+        else:
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_fill_color(255, 255, 255)
+            pdf.set_text_color(0, 0, 0)
+
+        for i, col in enumerate(columns):
+            val = str(row_data.get(col, ""))
+            if val == "0" and not is_total and not is_grand:
+                val = "-"
+            align = "L" if i == 0 else "C"
+            pdf.cell(col_widths[i], row_h, val, border=1, fill=True, align=align)
+        pdf.ln(row_h)
+        pdf.set_text_color(0, 0, 0)
+
+    for team in teams_show:
+        if pdf.get_y() > pdf.h - 40:
+            pdf.add_page()
+
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(0, 7, team, **NL)
+        _draw_header()
+
+        members = TEAMS.get(team, [])
+        for _, row in summary_df.iterrows():
+            sp = str(row["Sales Person"])
+            if sp in members:
+                _draw_row(row.to_dict())
+            elif sp == f"{team} Total":
+                _draw_row(row.to_dict(), is_total=True)
+
+        pdf.ln(3)
+
+    # Grand total
+    grand_rows = summary_df[summary_df["Sales Person"] == "GRAND TOTAL"]
+    if not grand_rows.empty:
+        if pdf.get_y() > pdf.h - 25:
+            pdf.add_page()
+        _draw_header()
+        _draw_row(grand_rows.iloc[0].to_dict(), is_grand=True)
+    pdf.ln(6)
+
+    # --- Section 2: Calling Status Breakdown ---
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, "2. Calling Status Breakdown", **NL)
+    pdf.ln(2)
+
+    breakdown_rows = []
+    total_leads = len(df_cs)
+    for status in statuses:
+        count = int(len(df_cs[df_cs["Follow-up Status"] == status]))
+        pct = round(count / total_leads * 100, 1) if total_leads > 0 else 0
+        breakdown_rows.append({"Status": status, "Count": str(count), "%": f"{pct}%"})
+    breakdown_rows.append({"Status": "TOTAL", "Count": str(total_leads), "%": "100%"})
+
+    bd_cols = ["Status", "Count", "%"]
+    bd_widths = [80, 40, 40]
+
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_fill_color(31, 78, 121)
+    pdf.set_text_color(255, 255, 255)
+    for i, col in enumerate(bd_cols):
+        pdf.cell(bd_widths[i], row_h, col, border=1, fill=True, align="C")
+    pdf.ln(row_h)
+    pdf.set_text_color(0, 0, 0)
+
+    for br in breakdown_rows:
+        is_total = br["Status"] == "TOTAL"
+        if is_total:
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_fill_color(214, 228, 240)
+        else:
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_fill_color(255, 255, 255)
+        pdf.cell(bd_widths[0], row_h, br["Status"], border=1, fill=True, align="L")
+        pdf.cell(bd_widths[1], row_h, br["Count"], border=1, fill=True, align="C")
+        pdf.cell(bd_widths[2], row_h, br["%"], border=1, fill=True, align="C")
+        pdf.ln(row_h)
+
+    return bytes(pdf.output())
 
 
 # ==============================================================================
@@ -1075,7 +1211,47 @@ def admin_view():
         teams_show = cs_team if cs_team else TEAM_ORDER
         if selected_statuses:
             call_summary = build_calling_summary(df_cs, teams_to_show=teams_show, statuses=selected_statuses)
-            st.dataframe(style_summary_table(call_summary), use_container_width=True, hide_index=True, height=700)
+
+            # --- Build filter description for PDF title ---
+            sel_months = st.session_state.get("cs_month", [])
+            sel_dates = st.session_state.get("cs_date", [])
+            if sel_dates:
+                filter_desc = ", ".join(sel_dates)
+            elif sel_months:
+                filter_desc = ", ".join(sel_months)
+            else:
+                filter_desc = "All Events"
+
+            # --- Expandable by-team view ---
+            st.markdown("#### Calling Status by Team")
+            for team in teams_show:
+                members = TEAMS.get(team, [])
+                team_rows = call_summary[call_summary["Sales Person"].isin(members + [f"{team} Total"])]
+                team_total_row = call_summary[call_summary["Sales Person"] == f"{team} Total"]
+                total_val = int(team_total_row["Total"].values[0]) if not team_total_row.empty else 0
+                with st.expander(f"{team} — {total_val} leads"):
+                    st.dataframe(style_summary_table(team_rows), use_container_width=True, hide_index=True)
+
+            # Grand total
+            grand_row = call_summary[call_summary["Sales Person"] == "GRAND TOTAL"]
+            if not grand_row.empty:
+                st.dataframe(style_summary_table(grand_row), use_container_width=True, hide_index=True)
+
+            # --- Full table (collapsed) ---
+            with st.expander("View full table"):
+                st.dataframe(style_summary_table(call_summary), use_container_width=True, hide_index=True, height=700)
+
+            # --- PDF Download ---
+            st.divider()
+            pdf_bytes = _build_calling_status_pdf(call_summary, selected_statuses, filter_desc, teams_show, df_cs)
+            st.download_button(
+                label="Download Calling Status as PDF",
+                data=pdf_bytes,
+                file_name=f"Calling_Status_{filter_desc.replace('/', '-').replace(' ', '_')}.pdf",
+                mime="application/pdf",
+                key="cs_pdf_download",
+                type="primary",
+            )
         else:
             st.info("Select at least one status to display.")
 
