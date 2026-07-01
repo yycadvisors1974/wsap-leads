@@ -72,14 +72,14 @@ def main():
     all_rows = []
     offset = 0
     while True:
-        resp = supabase.table("leads").select("pk,id,company_name,followup_status,remarks").range(offset, offset + 999).execute()
+        resp = supabase.table("leads").select("pk,id,company_name,followup_status,remarks,duplicate_check").range(offset, offset + 999).execute()
         all_rows.extend(resp.data)
         if len(resp.data) < 1000:
             break
         offset += 1000
     print(f"  Supabase rows: {len(all_rows)}")
 
-    # Build lookup: (id, company_name_lower) -> {pk, followup_status, remarks}
+    # Build lookup: (id, company_name_lower) -> {pk, followup_status, remarks, duplicate_check}
     db_lookup = {}
     for row in all_rows:
         key = (str(row["id"]).strip(), clean_str(row.get("company_name")).lower())
@@ -87,6 +87,7 @@ def main():
             "pk": row["pk"],
             "followup_status": clean_str(row.get("followup_status")),
             "remarks": clean_str(row.get("remarks")),
+            "duplicate_check": clean_str(row.get("duplicate_check")),
         }
 
     # Compare Excel vs Supabase
@@ -110,12 +111,15 @@ def main():
 
         excel_status = clean_str(excel_row.get("Follow-up Status"))
         excel_remarks = clean_str(excel_row.get("Remarks"))
+        excel_dup_chk = clean_str(excel_row.get("Duplicate Check"))
 
         updates = {}
         if excel_status and excel_status != db_row["followup_status"]:
             updates["followup_status"] = excel_status
         if excel_remarks != db_row["remarks"]:
             updates["remarks"] = excel_remarks if excel_remarks else None
+        if excel_dup_chk != db_row["duplicate_check"]:
+            updates["duplicate_check"] = excel_dup_chk if excel_dup_chk else None
 
         if updates:
             changes.append({

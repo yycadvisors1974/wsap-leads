@@ -1027,40 +1027,42 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
         st.markdown(f"**Showing {len(df_edit)} leads** — edit Follow-up Status & Remarks, then click Save.")
 
         # --- Editable Table ---
-        edited_df = st.data_editor(
-            df_edit,
-            column_config={
-                "pk": None,  # Hidden
-                "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
-                "Full Name": st.column_config.TextColumn("Full Name", disabled=True, width="medium"),
-                "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
-                "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
-                "Email Address": st.column_config.TextColumn("Email", disabled=True, width="medium"),
-                "Designation": st.column_config.TextColumn("Designation", disabled=True, width="small"),
-                "Follow-up Status": st.column_config.SelectboxColumn(
-                    "Follow-up Status", options=FOLLOWUP_STATUSES, required=True, width="medium",
-                ),
-                "Remarks": st.column_config.TextColumn("Remarks", width="small"),
-                "Conversation Log": st.column_config.TextColumn("Log", disabled=True, width="medium"),
-                "Preview Date": st.column_config.TextColumn("Event Date", disabled=True, width="small"),
-                "Topic": st.column_config.TextColumn("Topic", disabled=True, width="small"),
-                "Attendance": st.column_config.TextColumn("Attend", disabled=True, width="small"),
-                "Concern": st.column_config.TextColumn("Concern", disabled=True, width="medium"),
-                "Area": st.column_config.TextColumn("Area", disabled=True, width="small"),
-                "Industry": st.column_config.TextColumn("Industry", disabled=True, width="small"),
-                "Revenue (M)": st.column_config.NumberColumn("Revenue (M)", disabled=True, width="small"),
-                "Duplicate Check": st.column_config.TextColumn("Dup Chk", disabled=True, width="small"),
-                "Registered": st.column_config.NumberColumn("Registered", disabled=True, width="small"),
-                "Attended": st.column_config.NumberColumn("Attended", disabled=True, width="small"),
-            },
-            use_container_width=True,
-            num_rows="fixed",
-            hide_index=True,
-            key="sp_editor",
-        )
+        with st.form(key=f"sp_edit_form_{user_email}"):
+            edited_df = st.data_editor(
+                df_edit,
+                column_config={
+                    "pk": None,  # Hidden
+                    "ID": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                    "Full Name": st.column_config.TextColumn("Full Name", disabled=True, width="medium"),
+                    "Company Name": st.column_config.TextColumn("Company", disabled=True, width="medium"),
+                    "Contact Number": st.column_config.TextColumn("Phone", disabled=True, width="small"),
+                    "Email Address": st.column_config.TextColumn("Email", disabled=True, width="medium"),
+                    "Designation": st.column_config.TextColumn("Designation", disabled=True, width="small"),
+                    "Follow-up Status": st.column_config.SelectboxColumn(
+                        "Follow-up Status", options=FOLLOWUP_STATUSES, required=True, width="medium",
+                    ),
+                    "Remarks": st.column_config.TextColumn("Remarks", width="small"),
+                    "Conversation Log": st.column_config.TextColumn("Log", disabled=True, width="medium"),
+                    "Preview Date": st.column_config.TextColumn("Event Date", disabled=True, width="small"),
+                    "Topic": st.column_config.TextColumn("Topic", disabled=True, width="small"),
+                    "Attendance": st.column_config.TextColumn("Attend", disabled=True, width="small"),
+                    "Concern": st.column_config.TextColumn("Concern", disabled=True, width="medium"),
+                    "Area": st.column_config.TextColumn("Area", disabled=True, width="small"),
+                    "Industry": st.column_config.TextColumn("Industry", disabled=True, width="small"),
+                    "Revenue (M)": st.column_config.NumberColumn("Revenue (M)", disabled=True, width="small"),
+                    "Duplicate Check": st.column_config.TextColumn("Dup Chk", disabled=True, width="small"),
+                    "Registered": st.column_config.NumberColumn("Registered", disabled=True, width="small"),
+                    "Attended": st.column_config.NumberColumn("Attended", disabled=True, width="small"),
+                },
+                use_container_width=True,
+                num_rows="fixed",
+                hide_index=True,
+                key=f"sp_editor_{user_email}",
+            )
 
-        # --- Save Button ---
-        if st.button("Save Changes", type="primary", use_container_width=True):
+            submitted = st.form_submit_button("Save Changes", type="primary", use_container_width=True)
+
+        if submitted:
             changes = {}
             for i in range(len(df_edit)):
                 orig_row = df_edit.iloc[i]
