@@ -109,6 +109,7 @@ DISPLAY_COLUMNS = [
     "Designation", "Follow-up Status", "Remarks", "Conversation Log",
     "Preview Date", "Topic", "Attendance", "Concern", "Area", "Industry",
     "Revenue (M)", "Duplicate Check", "Registered", "Attended",
+    "UTM Grouping", "UTM Value",
 ]
 
 # Columns shown by default in salesperson view
@@ -116,7 +117,7 @@ SP_DEFAULT_COLUMNS = [
     "Full Name", "Company Name", "Contact Number",
     "Designation", "Follow-up Status", "Remarks",
     "Revenue (M)", "Registered", "Attended",
-    "Area", "Concern",
+    "Area", "Concern", "UTM Value",
 ]
 
 # Supabase column name → Display column name
@@ -950,8 +951,14 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
         # --- Filters Row 2 ---
         available_cols = [c for c in DISPLAY_COLUMNS if c in df_sp.columns]
         default_cols = [c for c in SP_DEFAULT_COLUMNS if c in available_cols]
-        fcol4, fcol5, fcol6 = st.columns(3)
+        fcol4, fcol4b, fcol5, fcol6 = st.columns(4)
         with fcol4:
+            utm_group_values = sorted(df_sp["UTM Grouping"].dropna().astype(str).str.strip().unique())
+            utm_group_values = [v for v in utm_group_values if v and v.lower() not in ("nan", "none", "")]
+            utm_group_filter = st.multiselect(
+                "Source", utm_group_values, default=[], placeholder="All sources", key="sp_utm_group"
+            )
+        with fcol4b:
             concern_values = sorted(df_sp["Concern"].dropna().astype(str).str.strip().unique())
             concern_values = [c for c in concern_values if c and c.lower() not in ("nan", "none", "")]
             concern_filter = st.multiselect(
@@ -986,6 +993,8 @@ def salesperson_view(user_email: str, user_name: str, show_header: bool = True):
             df_display = df_display[df_display["Follow-up Status"].isin(status_filter)]
         if event_filter:
             df_display = df_display[df_display["Event Date Label"].isin(event_filter)]
+        if utm_group_filter:
+            df_display = df_display[df_display["UTM Grouping"].astype(str).str.strip().isin(utm_group_filter)]
         if concern_filter:
             df_display = df_display[df_display["Concern"].astype(str).str.strip().isin(concern_filter)]
         if search:
